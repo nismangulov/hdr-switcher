@@ -1,6 +1,11 @@
-// Entry point — will be implemented in Task 6
-internal static class Program
-{
-    [System.STAThread]
-    static void Main() { }
-}
+using HdrSwitcher;
+
+Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+Application.EnableVisualStyles();
+Application.SetCompatibleTextRenderingDefault(false);
+
+var hdr = new HdrManager();
+var autostart = new AutostartManager();
+var context = new TrayApplicationContext(hdr, autostart);
+
+Application.Run(context);
