@@ -30,7 +30,6 @@ public static class IconRenderer
         };
 
         using var bodyBrush = new SolidBrush(bodyColor);
-        using var rayBrush = new SolidBrush(bodyColor);
         using var slashPen = new Pen(Color.FromArgb(220, 200, 50, 50), sizePx * 0.10f)
         {
             StartCap = LineCap.Round,
@@ -54,7 +53,7 @@ public static class IconRenderer
                 new PointF(cx + rx * outerR,         cy + ry * outerR),
                 new PointF(cx + rx * innerR - perpX, cy + ry * innerR - perpY),
             });
-            g.FillPath(rayBrush, path);
+            g.FillPath(bodyBrush, path);
         }
 
         g.FillEllipse(bodyBrush, cx - r, cy - r, r * 2, r * 2);

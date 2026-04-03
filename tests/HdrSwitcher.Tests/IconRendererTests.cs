@@ -14,7 +14,7 @@ public class IconRendererTests
     [InlineData(HdrState.Mixed, 32)]
     public void Render_ReturnsNonNullIcon(HdrState state, int size)
     {
-        var icon = IconRenderer.Render(state, size);
+        using var icon = IconRenderer.Render(state, size);
         Assert.NotNull(icon);
     }
 
@@ -24,7 +24,7 @@ public class IconRendererTests
     [InlineData(HdrState.AllOn, 48)]
     public void Render_ProducesCorrectSize(HdrState state, int size)
     {
-        var icon = IconRenderer.Render(state, size);
+        using var icon = IconRenderer.Render(state, size);
         Assert.Equal(size, icon.Width);
         Assert.Equal(size, icon.Height);
     }
@@ -32,10 +32,10 @@ public class IconRendererTests
     [Fact]
     public void AllOn_And_AllOff_ProduceDifferentIcons()
     {
-        var on = IconRenderer.Render(HdrState.AllOn, 32);
-        var off = IconRenderer.Render(HdrState.AllOff, 32);
-        var bmOn = on.ToBitmap();
-        var bmOff = off.ToBitmap();
+        using var on = IconRenderer.Render(HdrState.AllOn, 32);
+        using var off = IconRenderer.Render(HdrState.AllOff, 32);
+        using var bmOn = on.ToBitmap();
+        using var bmOff = off.ToBitmap();
         bool anyDifference = false;
         for (int x = 0; x < 32 && !anyDifference; x++)
             for (int y = 0; y < 32 && !anyDifference; y++)
