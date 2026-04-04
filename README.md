@@ -2,6 +2,12 @@
 
 A minimal Windows 11 system tray app that toggles HDR on your displays with a single click.
 
+## Why
+
+Keeping HDR always on isn't ideal — it affects colour mapping for SDR content, so you often want to switch it off when not watching HDR media. But checking whether HDR is currently on requires opening Windows Settings, and toggling it means either navigating the Settings UI or using a keyboard shortcut that's easy to forget.
+
+HDR Switcher puts the current state in your system tray at a glance and lets you toggle it with a single click.
+
 ---
 
 ## Features
