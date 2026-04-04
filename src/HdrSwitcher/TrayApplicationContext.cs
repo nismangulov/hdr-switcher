@@ -10,7 +10,6 @@ public class TrayApplicationContext : ApplicationContext
     private readonly AutostartManager _autostart;
     private readonly NotifyIcon _tray;
     private readonly ContextMenuStrip _menu;
-    private readonly DisplayChangeListener _displayListener;
 
     // NIM_SETVERSION — tells the shell to send NOTIFYICON_VERSION_4 messages,
     // which fixes tray icon behaviour on multi-monitor setups
@@ -57,7 +56,7 @@ public class TrayApplicationContext : ApplicationContext
         ApplyNotifyIconVersion4();
 
         // Re-render icon when HDR state changes externally (e.g. via Windows Settings)
-        _displayListener = new DisplayChangeListener(RefreshIcon);
+        SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
 
         // Re-render icon when accent colour or dark/light mode changes
         SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
@@ -102,6 +101,8 @@ public class TrayApplicationContext : ApplicationContext
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
+
+    private void OnDisplaySettingsChanged(object? sender, EventArgs e) => RefreshIcon();
 
     private void OnUserPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)
     {
@@ -211,8 +212,8 @@ public class TrayApplicationContext : ApplicationContext
     {
         if (disposing)
         {
+            SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
             SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
-            _displayListener.Dispose();
             _tray.Icon?.Dispose();
             _tray.Dispose();
             _menu.Dispose();
@@ -220,27 +221,5 @@ public class TrayApplicationContext : ApplicationContext
         base.Dispose(disposing);
     }
 
-    // ── Hidden message-only window that listens for WM_DISPLAYCHANGE ──────────
-    // Fires whenever HDR is toggled externally (Windows Settings, another app),
-    // a monitor is plugged/unplugged, or resolution/refresh rate changes.
-    private sealed class DisplayChangeListener : NativeWindow, IDisposable
-    {
-        private const int WM_DISPLAYCHANGE = 0x007E;
-        private readonly Action _onChanged;
 
-        public DisplayChangeListener(Action onChanged)
-        {
-            _onChanged = onChanged;
-            // HWND_MESSAGE (-3): message-only window, never shown
-            CreateHandle(new CreateParams { Parent = (IntPtr)(-3) });
-        }
-
-        protected override void WndProc(ref Message m)
-        {
-            if (m.Msg == WM_DISPLAYCHANGE) _onChanged();
-            base.WndProc(ref m);
-        }
-
-        public void Dispose() => DestroyHandle();
-    }
 }
