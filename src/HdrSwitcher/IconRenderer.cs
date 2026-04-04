@@ -15,7 +15,7 @@ public static class IconRenderer
     /// <summary>Renders a single-size icon. Used by tests and as a fallback.</summary>
     public static Icon Render(HdrState state, int sizePx)
     {
-        using var bmp = RenderBitmap(state, sizePx, ThemeHelper.IsDarkMode, ThemeHelper.AccentColor);
+        using var bmp = RenderBitmap(state, sizePx, ThemeHelper.IsDarkMode);
         var hIcon = bmp.GetHicon();
         try { return (Icon)Icon.FromHandle(hIcon).Clone(); }
         finally { DestroyIcon(hIcon); }
@@ -28,12 +28,11 @@ public static class IconRenderer
     public static Icon RenderMultiSize(HdrState state)
     {
         bool dark = ThemeHelper.IsDarkMode;
-        Color accent = ThemeHelper.AccentColor;
 
         int[] sizes = [16, 20, 24, 32];
         var pngs = sizes.Select(s =>
         {
-            using var bmp = RenderBitmap(state, s, dark, accent);
+            using var bmp = RenderBitmap(state, s, dark);
             using var ms = new MemoryStream();
             bmp.Save(ms, ImageFormat.Png);
             return ms.ToArray();
@@ -69,7 +68,7 @@ public static class IconRenderer
         return new Icon(stream);
     }
 
-    private static Bitmap RenderBitmap(HdrState state, int sizePx, bool darkMode, Color accentColor)
+    private static Bitmap RenderBitmap(HdrState state, int sizePx, bool darkMode)
     {
         var bmp = new Bitmap(sizePx, sizePx);
         using var g = Graphics.FromImage(bmp);
@@ -118,10 +117,10 @@ public static class IconRenderer
         }
         else
         {
-            // AllOn: filled with the Windows accent colour — integrates with system theme
-            // Mixed:  same but dimmed to signal partial state
+            // AllOn: solid white; Mixed: dimmed to signal partial state
+            Color fillColor = darkMode ? Color.White : Color.FromArgb(255, 40, 40, 40);
             int alpha = state == HdrState.Mixed ? 160 : 255;
-            using var brush = new SolidBrush(Color.FromArgb(alpha, accentColor));
+            using var brush = new SolidBrush(Color.FromArgb(alpha, fillColor));
             g.FillPath(brush, sunPath);
         }
 
