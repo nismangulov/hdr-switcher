@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/nismangulov/hdr-switcher/compare/v1.0.0...v1.0.1) (2026-04-04)
+
+
+### Bug Fixes
+
+* use SystemEvents.DisplaySettingsChanged to detect external HDR changes ([55dedf4](https://github.com/nismangulov/hdr-switcher/commit/55dedf483983b5e466f362c8bf257e6dc2139246))
+
 ## 1.0.0 (2026-04-04)
 
 
