@@ -5,9 +5,12 @@ namespace HdrSwitcher;
 public class HdrManager : IHdrManager
 {
     private const int QDC_ONLY_ACTIVE_PATHS = 0x00000002;
-    private const int DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO = 14;
-    private const int DISPLAYCONFIG_DEVICE_INFO_SET_ADVANCED_COLOR_STATE = 15;
+    private const int DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO = 9;
+    private const int DISPLAYCONFIG_DEVICE_INFO_SET_ADVANCED_COLOR_STATE = 10;
     private const int ERROR_SUCCESS = 0;
+
+    // value bits: 0=advancedColorSupported, 1=advancedColorEnabled, 2=wideColorEnforced
+    // True HDR = bit1 set AND bit2 clear (bit2 is set when display is in WCG-only mode)
 
     [StructLayout(LayoutKind.Sequential)]
     private struct LUID { public uint LowPart; public int HighPart; }
@@ -107,7 +110,7 @@ public class HdrManager : IHdrManager
             var colorInfo = GetAdvancedColorInfo(path.targetInfo.adapterId, path.targetInfo.id);
 
             bool hdrSupported = (colorInfo.value & 1) != 0;
-            bool hdrEnabled = (colorInfo.value & 2) != 0;
+            bool hdrEnabled = (colorInfo.value & 2) != 0 && (colorInfo.value & 4) == 0;
 
             if (!hdrSupported) continue;
 

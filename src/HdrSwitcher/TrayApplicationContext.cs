@@ -53,12 +53,19 @@ public class TrayApplicationContext : ApplicationContext
     {
         if (e.Button != MouseButtons.Left) return;
 
-        var displays = _hdr.GetDisplays();
-        var primary = displays.FirstOrDefault(d => d.IsPrimary) ?? displays.FirstOrDefault();
-        if (primary is null) return;
+        try
+        {
+            var displays = _hdr.GetDisplays();
+            var primary = displays.FirstOrDefault(d => d.IsPrimary) ?? displays.FirstOrDefault();
+            if (primary is null) return;
 
-        _hdr.SetHdr(primary.Id, !primary.HdrEnabled);
-        RefreshIcon();
+            _hdr.SetHdr(primary.Id, !primary.HdrEnabled);
+            RefreshIcon();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"SetHdr failed: {ex.Message}", "HDR Switcher Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
     private void RebuildMenu()
@@ -95,8 +102,15 @@ public class TrayApplicationContext : ApplicationContext
             var captured = display;
             item.Click += (_, _) =>
             {
-                _hdr.SetHdr(captured.Id, !captured.HdrEnabled);
-                RefreshIcon();
+                try
+                {
+                    _hdr.SetHdr(captured.Id, !captured.HdrEnabled);
+                    RefreshIcon();
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"SetHdr failed: {ex.Message}", "HDR Switcher Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
             };
             _menu.Items.Add(item);
         }
