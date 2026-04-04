@@ -76,51 +76,45 @@ public static class IconRenderer
         g.Clear(Color.Transparent);
 
         float cx = sizePx / 2f, cy = sizePx / 2f;
-        float r = sizePx * 0.27f;
-        float rayLen = sizePx * 0.15f;
-        float rayW = sizePx * 0.065f;
+        float r        = sizePx * 0.27f;
+        float innerR   = r + sizePx * 0.05f;
+        float outerR   = innerR + sizePx * 0.15f;
+        float rayHalfW = sizePx * 0.08f;   // constant-width rectangular rays
         const int numRays = 8;
 
-        // Build sun path — shared by all states
+        // One path, used for both FillPath (AllOn/Mixed) and DrawPath (AllOff)
         using var sunPath = new GraphicsPath();
         for (int i = 0; i < numRays; i++)
         {
             double angle = Math.PI * 2 * i / numRays;
             float rx = (float)Math.Cos(angle), ry = (float)Math.Sin(angle);
-            float innerR = r + sizePx * 0.05f, outerR = innerR + rayLen;
-            float perpX = -ry * rayW / 2, perpY = rx * rayW / 2;
+            float px = -ry * rayHalfW, py = rx * rayHalfW;   // perpendicular offset
+
+            // 4-corner rectangle — same width at base and tip
             sunPath.AddPolygon(new[]
             {
-                new PointF(cx + rx * innerR + perpX, cy + ry * innerR + perpY),
-                new PointF(cx + rx * outerR,          cy + ry * outerR),
-                new PointF(cx + rx * innerR - perpX,  cy + ry * innerR - perpY),
+                new PointF(cx + rx * innerR + px, cy + ry * innerR + py),  // inner-left
+                new PointF(cx + rx * outerR + px, cy + ry * outerR + py),  // outer-left
+                new PointF(cx + rx * outerR - px, cy + ry * outerR - py),  // outer-right
+                new PointF(cx + rx * innerR - px, cy + ry * innerR - py),  // inner-right
             });
         }
         sunPath.AddEllipse(cx - r, cy - r, r * 2, r * 2);
 
-        // Stroke colour for the AllOff outlined sun
-        Color strokeColor = darkMode ? Color.White : Color.FromArgb(255, 40, 40, 40);
+        Color iconColor = darkMode ? Color.White : Color.FromArgb(255, 40, 40, 40);
 
         if (state == HdrState.AllOff)
         {
-            // Outlined sun — same shape but hollow, reads as "inactive"
-            using var pen = new Pen(strokeColor, sizePx * 0.075f)
-                { StartCap = LineCap.Round, EndCap = LineCap.Round };
-            g.DrawEllipse(pen, cx - r, cy - r, r * 2, r * 2);
-            for (int i = 0; i < numRays; i++)
-            {
-                double angle = Math.PI * 2 * i / numRays;
-                float rx = (float)Math.Cos(angle), ry = (float)Math.Sin(angle);
-                float innerR = r + sizePx * 0.06f, outerR = innerR + rayLen;
-                g.DrawLine(pen, cx + rx * innerR, cy + ry * innerR, cx + rx * outerR, cy + ry * outerR);
-            }
+            // Outlined — same path, hollow centre reads as "inactive"
+            float penW = Math.Max(1f, sizePx * 0.065f);
+            using var pen = new Pen(iconColor, penW);
+            g.DrawPath(pen, sunPath);
         }
         else
         {
-            // AllOn: solid white; Mixed: dimmed to signal partial state
-            Color fillColor = darkMode ? Color.White : Color.FromArgb(255, 40, 40, 40);
+            // AllOn: solid; Mixed: dimmed to signal partial state
             int alpha = state == HdrState.Mixed ? 160 : 255;
-            using var brush = new SolidBrush(Color.FromArgb(alpha, fillColor));
+            using var brush = new SolidBrush(Color.FromArgb(alpha, iconColor));
             g.FillPath(brush, sunPath);
         }
 
