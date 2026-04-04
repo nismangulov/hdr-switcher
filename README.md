@@ -2,8 +2,6 @@
 
 A minimal Windows 11 system tray app that toggles HDR on your displays with a single click.
 
-![HDR On](docs/img/tray-on.png) ![HDR Off](docs/img/tray-off.png)
-
 ---
 
 ## Features
