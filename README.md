@@ -8,6 +8,8 @@ Keeping HDR always on isn't ideal — it affects colour mapping for SDR content,
 
 HDR Switcher puts the current state in your system tray at a glance and lets you toggle it with a single click.
 
+![HDR Switcher in the system tray](docs/img/tray.png)
+
 ---
 
 ## Features
