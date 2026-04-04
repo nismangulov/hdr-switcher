@@ -28,7 +28,6 @@ public static class IconRenderer
     public static Icon RenderMultiSize(HdrState state)
     {
         bool dark = ThemeHelper.IsDarkMode;
-
         int[] sizes = [16, 20, 24, 32];
         var pngs = sizes.Select(s =>
         {
@@ -37,35 +36,85 @@ public static class IconRenderer
             bmp.Save(ms, ImageFormat.Png);
             return ms.ToArray();
         }).ToArray();
-
         using var stream = new MemoryStream();
-        using var bw = new BinaryWriter(stream);
+        PackIco(stream, sizes, pngs);
+        stream.Position = 0;
+        return new Icon(stream);
+    }
 
-        // ICONDIR
-        bw.Write((ushort)0);             // reserved
-        bw.Write((ushort)1);             // type: icon
-        bw.Write((ushort)sizes.Length);  // image count
+    /// <summary>
+    /// Generates the application icon (.ico) bytes — golden sun at 16/32/48/256 px.
+    /// Written once to icon.ico at build time; embedded via &lt;ApplicationIcon&gt;.
+    /// </summary>
+    public static byte[] RenderAppIconBytes()
+    {
+        // Golden amber — visible on any background (Explorer, desktop, taskbar)
+        Color golden = Color.FromArgb(255, 255, 196, 0);
+        int[] sizes = [16, 32, 48, 256];
+        var pngs = sizes.Select(s =>
+        {
+            using var bmp = RenderAppIconBitmap(s, golden);
+            using var ms = new MemoryStream();
+            bmp.Save(ms, ImageFormat.Png);
+            return ms.ToArray();
+        }).ToArray();
+        using var stream = new MemoryStream();
+        PackIco(stream, sizes, pngs);
+        return stream.ToArray();
+    }
 
-        // ICONDIRENTRY array
+    private static void PackIco(Stream stream, int[] sizes, byte[][] pngs)
+    {
+        using var bw = new BinaryWriter(stream, System.Text.Encoding.Default, leaveOpen: true);
+        bw.Write((ushort)0);            // reserved
+        bw.Write((ushort)1);            // type: icon
+        bw.Write((ushort)sizes.Length); // image count
+
         int dataOffset = 6 + sizes.Length * 16;
         for (int i = 0; i < sizes.Length; i++)
         {
-            bw.Write((byte)sizes[i]);        // width  (0 = 256)
-            bw.Write((byte)sizes[i]);        // height
-            bw.Write((byte)0);               // color count (0 = true colour)
+            int w = sizes[i] >= 256 ? 0 : sizes[i];
+            bw.Write((byte)w);               // width  (0 = 256)
+            bw.Write((byte)w);               // height
+            bw.Write((byte)0);               // color count
             bw.Write((byte)0);               // reserved
             bw.Write((ushort)1);             // planes
             bw.Write((ushort)32);            // bpp
-            bw.Write((uint)pngs[i].Length);  // data size
-            bw.Write((uint)dataOffset);      // data offset
+            bw.Write((uint)pngs[i].Length);
+            bw.Write((uint)dataOffset);
             dataOffset += pngs[i].Length;
         }
-
         foreach (var png in pngs)
             bw.Write(png);
+    }
 
-        stream.Position = 0;
-        return new Icon(stream);
+    /// <summary>Renders the golden app icon bitmap with longer rays suitable for large sizes.</summary>
+    private static Bitmap RenderAppIconBitmap(int sizePx, Color color)
+    {
+        var bmp = new Bitmap(sizePx, sizePx);
+        using var g = Graphics.FromImage(bmp);
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.Clear(Color.Transparent);
+
+        float cx = sizePx / 2f, cy = sizePx / 2f;
+        float r      = sizePx * 0.27f;
+        float innerR = r + sizePx * 0.06f;
+        float outerR = innerR + sizePx * 0.17f;  // longer rays for larger icon
+        const int numRays = 8;
+        float penW = Math.Max(1.5f, sizePx * 0.07f);
+
+        using var pen = new Pen(color, penW) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+        for (int i = 0; i < numRays; i++)
+        {
+            double angle = Math.PI * 2 * i / numRays;
+            float rx = (float)Math.Cos(angle), ry = (float)Math.Sin(angle);
+            g.DrawLine(pen, cx + rx * innerR, cy + ry * innerR, cx + rx * outerR, cy + ry * outerR);
+        }
+
+        using var brush = new SolidBrush(color);
+        g.FillEllipse(brush, cx - r, cy - r, r * 2, r * 2);
+
+        return bmp;
     }
 
     private static Bitmap RenderBitmap(HdrState state, int sizePx, bool darkMode)
@@ -76,46 +125,35 @@ public static class IconRenderer
         g.Clear(Color.Transparent);
 
         float cx = sizePx / 2f, cy = sizePx / 2f;
-        float r        = sizePx * 0.27f;
-        float innerR   = r + sizePx * 0.05f;
-        float outerR   = innerR + sizePx * 0.15f;
-        float rayHalfW = sizePx * 0.08f;   // constant-width rectangular rays
+        float r      = sizePx * 0.27f;
+        float innerR = r + sizePx * 0.06f;
+        float outerR = innerR + sizePx * 0.10f;
         const int numRays = 8;
 
-        // One path, used for both FillPath (AllOn/Mixed) and DrawPath (AllOff)
-        using var sunPath = new GraphicsPath();
+        Color iconColor = darkMode ? Color.White : Color.FromArgb(255, 40, 40, 40);
+        int alpha = state == HdrState.Mixed ? 160 : 255;
+        Color color = Color.FromArgb(alpha, iconColor);
+        float penW = Math.Max(1f, sizePx * 0.07f);
+
+        // Rays — always outlined lines, identical for every state
+        using var rayPen = new Pen(color, penW) { StartCap = LineCap.Round, EndCap = LineCap.Round };
         for (int i = 0; i < numRays; i++)
         {
             double angle = Math.PI * 2 * i / numRays;
             float rx = (float)Math.Cos(angle), ry = (float)Math.Sin(angle);
-            float px = -ry * rayHalfW, py = rx * rayHalfW;   // perpendicular offset
-
-            // 4-corner rectangle — same width at base and tip
-            sunPath.AddPolygon(new[]
-            {
-                new PointF(cx + rx * innerR + px, cy + ry * innerR + py),  // inner-left
-                new PointF(cx + rx * outerR + px, cy + ry * outerR + py),  // outer-left
-                new PointF(cx + rx * outerR - px, cy + ry * outerR - py),  // outer-right
-                new PointF(cx + rx * innerR - px, cy + ry * innerR - py),  // inner-right
-            });
+            g.DrawLine(rayPen, cx + rx * innerR, cy + ry * innerR, cx + rx * outerR, cy + ry * outerR);
         }
-        sunPath.AddEllipse(cx - r, cy - r, r * 2, r * 2);
 
-        Color iconColor = darkMode ? Color.White : Color.FromArgb(255, 40, 40, 40);
-
+        // Circle — filled for AllOn/Mixed, outlined for AllOff
         if (state == HdrState.AllOff)
         {
-            // Outlined — same path, hollow centre reads as "inactive"
-            float penW = Math.Max(1f, sizePx * 0.065f);
-            using var pen = new Pen(iconColor, penW);
-            g.DrawPath(pen, sunPath);
+            using var circlePen = new Pen(color, penW);
+            g.DrawEllipse(circlePen, cx - r, cy - r, r * 2, r * 2);
         }
         else
         {
-            // AllOn: solid; Mixed: dimmed to signal partial state
-            int alpha = state == HdrState.Mixed ? 160 : 255;
-            using var brush = new SolidBrush(Color.FromArgb(alpha, iconColor));
-            g.FillPath(brush, sunPath);
+            using var brush = new SolidBrush(color);
+            g.FillEllipse(brush, cx - r, cy - r, r * 2, r * 2);
         }
 
         return bmp;
