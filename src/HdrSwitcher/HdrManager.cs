@@ -8,6 +8,7 @@ public class HdrManager : IHdrManager
     private const int DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO = 9;
     private const int DISPLAYCONFIG_DEVICE_INFO_SET_ADVANCED_COLOR_STATE = 10;
     private const int ERROR_SUCCESS = 0;
+    private const int ERROR_INSUFFICIENT_BUFFER = 122;
 
     // value bits: 0=advancedColorSupported, 1=advancedColorEnabled, 2=wideColorEnforced
     // True HDR = bit1 set AND bit2 clear (bit2 is set when display is in WCG-only mode)
@@ -154,15 +155,23 @@ public class HdrManager : IHdrManager
 
     private DISPLAYCONFIG_PATH_INFO[] QueryPaths()
     {
-        int err = GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, out uint numPaths, out uint numModes);
-        if (err != ERROR_SUCCESS) throw new InvalidOperationException($"GetDisplayConfigBufferSizes failed: {err}");
+        // Retry loop handles the race where display topology changes between
+        // GetDisplayConfigBufferSizes and QueryDisplayConfig (e.g. Thunderbolt docks)
+        int err;
+        uint numPaths, numModes;
+        DISPLAYCONFIG_PATH_INFO[] paths;
+        DISPLAYCONFIG_MODE_INFO[] modes;
+        do
+        {
+            err = GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, out numPaths, out numModes);
+            if (err != ERROR_SUCCESS) throw new InvalidOperationException($"GetDisplayConfigBufferSizes failed: {err}");
 
-        var paths = new DISPLAYCONFIG_PATH_INFO[numPaths];
-        var modes = new DISPLAYCONFIG_MODE_INFO[numModes];
+            paths = new DISPLAYCONFIG_PATH_INFO[numPaths];
+            modes = new DISPLAYCONFIG_MODE_INFO[numModes];
+            err = QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, ref numPaths, paths, ref numModes, modes, IntPtr.Zero);
+        } while (err == ERROR_INSUFFICIENT_BUFFER);
 
-        err = QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, ref numPaths, paths, ref numModes, modes, IntPtr.Zero);
         if (err != ERROR_SUCCESS) throw new InvalidOperationException($"QueryDisplayConfig failed: {err}");
-
         return paths[..((int)numPaths)];
     }
 
