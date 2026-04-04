@@ -1,2 +1,4 @@
 .worktrees/
 publish/
+bin/
+obj/
