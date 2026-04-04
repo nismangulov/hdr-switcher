@@ -1,5 +1,6 @@
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Runtime.InteropServices;
 
 namespace HdrSwitcher;
 
@@ -7,6 +8,9 @@ public enum HdrState { AllOn, AllOff, Mixed }
 
 public static class IconRenderer
 {
+    [DllImport("user32.dll")]
+    private static extern bool DestroyIcon(IntPtr hIcon);
+
     public static Icon Render(HdrState state, int sizePx)
     {
         using var bmp = new Bitmap(sizePx, sizePx);
@@ -73,6 +77,7 @@ public static class IconRenderer
         }
 
         var hIcon = bmp.GetHicon();
-        return Icon.FromHandle(hIcon);
+        try { return (Icon)Icon.FromHandle(hIcon).Clone(); }
+        finally { DestroyIcon(hIcon); }
     }
 }

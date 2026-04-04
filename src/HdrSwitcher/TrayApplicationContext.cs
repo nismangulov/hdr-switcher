@@ -58,7 +58,6 @@ public class TrayApplicationContext : ApplicationContext
             var displays = _hdr.GetDisplays();
             var primary = displays.FirstOrDefault(d => d.IsPrimary) ?? displays.FirstOrDefault();
             if (primary is null) return;
-
             _hdr.SetHdr(primary.Id, !primary.HdrEnabled);
             RefreshIcon();
         }
@@ -123,7 +122,7 @@ public class TrayApplicationContext : ApplicationContext
         };
         autostartItem.Click += (_, _) =>
         {
-            _autostart.SetEnabled(!_autostart.IsEnabled());
+            _autostart.SetEnabled(!autostartItem.Checked);
             RebuildMenu();
         };
         _menu.Items.Add(autostartItem);

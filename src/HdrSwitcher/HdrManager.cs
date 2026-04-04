@@ -130,9 +130,10 @@ public class HdrManager : IHdrManager
     public void SetHdr(uint displayId, bool enabled)
     {
         var paths = QueryPaths();
-        var path = paths.FirstOrDefault(p => p.targetInfo.id == displayId);
-        if (path.targetInfo.id != displayId)
+        int idx = Array.FindIndex(paths, p => p.targetInfo.id == displayId);
+        if (idx < 0)
             throw new InvalidOperationException($"Display {displayId} not found");
+        var path = paths[idx];
 
         var request = new DISPLAYCONFIG_SET_ADVANCED_COLOR_STATE
         {
@@ -177,7 +178,9 @@ public class HdrManager : IHdrManager
                 id = targetId
             }
         };
-        DisplayConfigGetDeviceInfo(ref request);
+        int err = DisplayConfigGetDeviceInfo(ref request);
+        if (err != ERROR_SUCCESS)
+            throw new InvalidOperationException($"DisplayConfigGetDeviceInfo failed: {err}");
         return request;
     }
 }
