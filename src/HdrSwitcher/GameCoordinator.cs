@@ -7,27 +7,34 @@ namespace HdrSwitcher;
 /// </summary>
 public class GameCoordinator : IDisposable
 {
-    private readonly SettingsManager _settings;
-    private readonly HdrController   _hdr;
-    private readonly AppLogger       _logger;
+    private readonly SettingsManager        _settings;
+    private readonly HdrController          _hdr;
+    private readonly AppLogger              _logger;
+    private readonly SynchronizationContext _syncContext;
 
     private volatile List<GameInfo> _currentGames = [];
     private GameFilter              _filter;
     private GameProcessMonitor?     _monitor;
     private System.Threading.Timer? _rescanTimer;
+    private bool                    _disposed;
 
     // install path → display snapshot taken at game-start
     private readonly Dictionary<string, IReadOnlyList<DisplayInfo>> _preGameHdrState = new();
     private readonly object _stateLock = new();
     private readonly CancellationTokenSource _cts = new();
 
-    /// <summary>Fired after every rescan (including the initial scan on startup).</summary>
+    private static readonly IReadOnlySet<int> EmptyPids = new HashSet<int>();
+
+    /// <summary>
+    /// Fired after every rescan (including the initial scan on startup).
+    /// Always invoked on the UI thread via the SynchronizationContext captured at construction.
+    /// </summary>
     public event Action? LibraryChanged;
 
-    /// <summary>Fired when a game process is detected.</summary>
+    /// <summary>Fired when a game process is detected. May be raised from any thread.</summary>
     public event Action<GameInfo>? GameStarted;
 
-    /// <summary>Fired when a tracked game process exits.</summary>
+    /// <summary>Fired when a tracked game process exits. Raised from a thread-pool thread.</summary>
     public event Action<GameInfo>? GameExited;
 
     public GameCoordinator(SettingsManager settings, HdrController hdr, AppLogger logger)
@@ -37,7 +44,7 @@ public class GameCoordinator : IDisposable
         _logger   = logger;
         _filter   = new GameFilter(settings);
 
-        var syncContext = SynchronizationContext.Current
+        _syncContext = SynchronizationContext.Current
             ?? throw new InvalidOperationException(
                 "GameCoordinator must be constructed on the UI thread.");
 
@@ -47,9 +54,12 @@ public class GameCoordinator : IDisposable
             var games = new GameLibraryScanner(_logger, _filter).ScanAll();
             _logger.LogLibrary(games);
 
-            syncContext.Post(_ =>
+            _syncContext.Post(_ =>
             {
-                _currentGames = games;
+                lock (_stateLock)
+                {
+                    _currentGames = games;
+                }
 
                 _monitor = new GameProcessMonitor(
                     games, _filter, OnGameStart, OnGameExit, _logger);
@@ -67,15 +77,16 @@ public class GameCoordinator : IDisposable
     }
 
     /// <summary>
-    /// Rescans game libraries, updates the monitor, and fires LibraryChanged.
+    /// Rescans game libraries, updates the monitor, and fires LibraryChanged on the UI thread.
     /// Safe to call from any thread.
     /// </summary>
     public void Rescan()
     {
         if (_cts.IsCancellationRequested) return;
 
-        _filter = new GameFilter(_settings); // pick up latest settings
-        var updated = new GameLibraryScanner(_logger, _filter).ScanAll();
+        // Keep filter local so concurrent Rescan() calls don't share a partially-constructed filter
+        var filter  = new GameFilter(_settings);
+        var updated = new GameLibraryScanner(_logger, filter).ScanAll();
 
         var snapshot      = _currentGames;
         var existingPaths = snapshot.Select(g => g.InstallPath)
@@ -91,17 +102,19 @@ public class GameCoordinator : IDisposable
 
         lock (_stateLock)
         {
+            _filter       = filter; // update shared field inside lock
             _currentGames = updated;
-            _monitor?.UpdateGames(updated, _filter);
+            _monitor?.UpdateGames(updated, filter);
         }
 
-        LibraryChanged?.Invoke();
+        // Always fire LibraryChanged on the UI thread for safe subscriber access
+        _syncContext.Post(_ => LibraryChanged?.Invoke(), null);
     }
 
     public IReadOnlyList<GameInfo> GetCurrentGames() => _currentGames;
 
     public IReadOnlySet<int> GetActiveGamePids() =>
-        _monitor?.GetActiveGamePids() ?? (IReadOnlySet<int>)new HashSet<int>();
+        _monitor?.GetActiveGamePids() ?? EmptyPids;
 
     private void OnGameStart(GameInfo game)
     {
@@ -138,7 +151,10 @@ public class GameCoordinator : IDisposable
 
     public void Dispose()
     {
+        if (_disposed) return;
+        _disposed = true;
         _cts.Cancel();
+        _cts.Dispose();
         _rescanTimer?.Dispose();
         _monitor?.Dispose();
     }
