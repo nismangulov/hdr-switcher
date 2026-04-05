@@ -13,6 +13,7 @@ public class GameLibraryScanner
         var games = new List<GameInfo>();
         try { games.AddRange(ScanSteam()); } catch { }
         try { games.AddRange(ScanEpic()); } catch { }
+        try { games.AddRange(ScanXbox()); } catch { }
         return games;
     }
 
@@ -46,6 +47,34 @@ public class GameLibraryScanner
                 var fullPath = Path.Combine(appsDir, "common", installDir);
                 if (Directory.Exists(fullPath))
                     yield return new GameInfo(name, fullPath, "Steam");
+            }
+        }
+    }
+
+    private static IEnumerable<GameInfo> ScanXbox()
+    {
+        // Win32 PC games from Xbox app install to a user-configured root (default C:\XboxGames).
+        // Each game lives in {root}\{GameName}\Content\.
+        var roots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // Read user-configured install root from GamingServices registry
+        using var gsKey = Registry.LocalMachine.OpenSubKey(
+            @"SOFTWARE\Microsoft\GamingServices");
+        if (gsKey?.GetValue("PackageRoot") is string regRoot && Directory.Exists(regRoot))
+            roots.Add(regRoot);
+
+        // Always check the default location as well
+        roots.Add(@"C:\XboxGames");
+
+        foreach (var root in roots)
+        {
+            if (!Directory.Exists(root)) continue;
+            foreach (var gameDir in Directory.GetDirectories(root))
+            {
+                var name        = Path.GetFileName(gameDir);
+                var contentPath = Path.Combine(gameDir, "Content");
+                var installPath = Directory.Exists(contentPath) ? contentPath : gameDir;
+                yield return new GameInfo(name, installPath, "Xbox");
             }
         }
     }

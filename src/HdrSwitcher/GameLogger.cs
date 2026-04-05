@@ -22,7 +22,8 @@ public class GameLogger : IDisposable
     {
         var bySteam = games.Count(g => g.Source == "Steam");
         var byEpic  = games.Count(g => g.Source == "Epic");
-        Write($"Library loaded — {games.Count} games (Steam: {bySteam}, Epic: {byEpic})");
+        var byXbox  = games.Count(g => g.Source == "Xbox");
+        Write($"Library loaded — {games.Count} games (Steam: {bySteam}, Epic: {byEpic}, Xbox: {byXbox})");
         foreach (var game in games.OrderBy(g => g.Source).ThenBy(g => g.Name))
             Write($"  [{game.Source}] {game.Name}  →  {game.InstallPath}");
     }
