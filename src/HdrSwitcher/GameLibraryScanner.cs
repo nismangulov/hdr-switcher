@@ -8,19 +8,14 @@ public record GameInfo(string Name, string InstallPath, string Source);
 
 public partial class GameLibraryScanner
 {
+    private readonly GameFilter? _filter;
     private readonly AppLogger? _logger;
 
-    public GameLibraryScanner(AppLogger? logger = null) => _logger = logger;
-
-    // Steam install directory names that belong to tools or benchmarks rather than games.
-    // Steam sometimes sets type="game" in their ACF, so the type filter alone is not enough.
-    // Add new entries here when they appear in the LIBRARY log and are not actual games.
-    private static readonly HashSet<string> SteamExcludedInstallDirs = new(StringComparer.OrdinalIgnoreCase)
+    public GameLibraryScanner(AppLogger? logger = null, GameFilter? filter = null)
     {
-        "Steamworks Shared", // Steam redistributables package
-        "3DMark",            // Benchmark tool
-        "OCCT",              // Benchmark / stress test tool
-    };
+        _filter = filter;
+        _logger = logger;
+    }
 
     public List<GameInfo> ScanAll()
     {
@@ -37,7 +32,7 @@ public partial class GameLibraryScanner
         catch (Exception ex) { _logger?.LogScanError(source, ex); }
     }
 
-    private static IEnumerable<GameInfo> ScanSteam()
+    private IEnumerable<GameInfo> ScanSteam()
     {
         using var key = Registry.CurrentUser.OpenSubKey(@"Software\Valve\Steam");
         if (key?.GetValue("SteamPath") is not string steamPath) yield break;
@@ -66,11 +61,13 @@ public partial class GameLibraryScanner
                 // Skip known non-game Steam entries by install directory name.
                 // These are tools/benchmarks that Steam classifies as "game" in their ACF
                 // but should not be treated as games for HDR purposes.
-                if (SteamExcludedInstallDirs.Contains(parsed.Value.installDir)) continue;
+                if (_filter?.IsExcludedInstallDir(parsed.Value.installDir) ?? false) continue;
 
                 var fullPath = Path.Combine(appsDir, "common", parsed.Value.installDir);
-                if (Directory.Exists(fullPath))
-                    yield return new GameInfo(parsed.Value.name, fullPath, "Steam");
+                if (!Directory.Exists(fullPath)) continue;
+                if (_filter?.IsBlacklistedPath(fullPath) ?? false) continue;
+
+                yield return new GameInfo(parsed.Value.name, fullPath, "Steam");
             }
         }
     }
