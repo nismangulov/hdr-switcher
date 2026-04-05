@@ -6,7 +6,7 @@ namespace HdrSwitcher;
 
 public record GameInfo(string Name, string InstallPath, string Source);
 
-public class GameLibraryScanner
+public partial class GameLibraryScanner
 {
     private readonly AppLogger? _logger;
 
@@ -35,31 +35,56 @@ public class GameLibraryScanner
         var vdfPath = Path.Combine(steamPath, "steamapps", "libraryfolders.vdf");
         if (!File.Exists(vdfPath)) yield break;
 
-        var vdf = File.ReadAllText(vdfPath);
-
-        // The VDF already lists all library roots including the Steam install dir itself —
-        // no need to prepend steamPath separately (avoids duplicating the default library)
-        var libraryRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (Match m in Regex.Matches(vdf, @"""path""\s+""([^""]+)"""))
-            libraryRoots.Add(m.Groups[1].Value.Replace(@"\\", @"\"));
-
-        foreach (var root in libraryRoots)
+        foreach (var root in ParseLibraryRoots(File.ReadAllText(vdfPath)))
         {
             var appsDir = Path.Combine(root, "steamapps");
             if (!Directory.Exists(appsDir)) continue;
 
             foreach (var acf in Directory.GetFiles(appsDir, "appmanifest_*.acf"))
             {
-                var content    = File.ReadAllText(acf);
-                var name       = Regex.Match(content, @"""name""\s+""([^""]+)""").Groups[1].Value;
-                var installDir = Regex.Match(content, @"""installdir""\s+""([^""]+)""").Groups[1].Value;
-                if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(installDir)) continue;
+                var parsed = ParseAppManifest(File.ReadAllText(acf));
+                if (parsed is null) continue;
 
-                var fullPath = Path.Combine(appsDir, "common", installDir);
+                var fullPath = Path.Combine(appsDir, "common", parsed.Value.installDir);
                 if (Directory.Exists(fullPath))
-                    yield return new GameInfo(name, fullPath, "Steam");
+                    yield return new GameInfo(parsed.Value.name, fullPath, "Steam");
             }
         }
+    }
+
+    [GeneratedRegex(@"""path""\s+""([^""]+)""")]
+    private static partial Regex VdfPathRegex();
+
+    [GeneratedRegex(@"""name""\s+""([^""]+)""")]
+    private static partial Regex AcfNameRegex();
+
+    [GeneratedRegex(@"""installdir""\s+""([^""]+)""")]
+    private static partial Regex AcfInstallDirRegex();
+
+    /// <summary>
+    /// Parses a <c>libraryfolders.vdf</c> and returns all unique library root paths.
+    /// Public for unit testing.
+    /// </summary>
+    public static IReadOnlyList<string> ParseLibraryRoots(string vdfContent)
+    {
+        // The VDF already lists all library roots including the Steam install dir itself —
+        // no need to prepend steamPath separately (avoids duplicating the default library)
+        var roots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (Match m in VdfPathRegex().Matches(vdfContent))
+            roots.Add(m.Groups[1].Value.Replace(@"\\", @"\"));
+        return [.. roots];
+    }
+
+    /// <summary>
+    /// Parses a Steam <c>appmanifest_*.acf</c> file and returns (name, installDir),
+    /// or null if either field is missing. Public for unit testing.
+    /// </summary>
+    public static (string name, string installDir)? ParseAppManifest(string content)
+    {
+        var name       = AcfNameRegex().Match(content).Groups[1].Value;
+        var installDir = AcfInstallDirRegex().Match(content).Groups[1].Value;
+        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(installDir)) return null;
+        return (name, installDir);
     }
 
     private static IEnumerable<GameInfo> ScanEpic()
@@ -72,18 +97,30 @@ public class GameLibraryScanner
         foreach (var item in Directory.GetFiles(manifestsDir, "*.item"))
         {
             GameInfo? game = null;
-            try
-            {
-                using var doc = JsonDocument.Parse(File.ReadAllText(item));
-                var root = doc.RootElement;
-                var name = root.GetProperty("DisplayName").GetString();
-                var path = root.GetProperty("InstallLocation").GetString();
-                if (!string.IsNullOrEmpty(name) && !string.IsNullOrEmpty(path) && Directory.Exists(path))
-                    game = new GameInfo(name, path, "Epic");
-            }
+            try { game = ParseEpicManifest(File.ReadAllText(item)); }
             catch { }
-            if (game is not null) yield return game;
+            // Skip stale manifests left behind by uninstalled games (matches
+            // the Directory.Exists guards in ScanSteam and ScanXbox)
+            if (game is not null && Directory.Exists(game.InstallPath))
+                yield return game;
         }
+    }
+
+    /// <summary>
+    /// Parses an Epic Games <c>.item</c> manifest JSON and returns a <see cref="GameInfo"/>,
+    /// or null if required fields are missing. Path existence is NOT checked here.
+    /// Public for unit testing.
+    /// </summary>
+    public static GameInfo? ParseEpicManifest(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        if (!root.TryGetProperty("DisplayName",    out var nameProp)) return null;
+        if (!root.TryGetProperty("InstallLocation", out var pathProp)) return null;
+        var name = nameProp.GetString();
+        var path = pathProp.GetString();
+        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(path)) return null;
+        return new GameInfo(name, path, "Epic");
     }
 
     private static IEnumerable<GameInfo> ScanXbox()
@@ -111,7 +148,7 @@ public class GameLibraryScanner
         }
     }
 
-    private static string? ReadDisplayNameFromManifest(string manifestPath)
+    public static string? ReadDisplayNameFromManifest(string manifestPath)
     {
         try
         {
@@ -137,7 +174,7 @@ public class GameLibraryScanner
     /// by stripping the publisher prefix and version/arch/hash suffix.
     /// e.g. "Atari.TotalChaos_1.2.2.0_x64__xka83p2csqhz2" → "TotalChaos"
     /// </summary>
-    private static string FriendlyNameFromPackage(string packageFullName)
+    public static string FriendlyNameFromPackage(string packageFullName)
     {
         // Format: Publisher.Name_Version_Arch_ResourceId_PublisherId
         var withoutSuffix = packageFullName.Split('_')[0]; // "Publisher.Name"

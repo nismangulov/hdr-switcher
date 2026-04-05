@@ -13,6 +13,16 @@ public class HdrManager : IHdrManager
     // value bits: 0=advancedColorSupported, 1=advancedColorEnabled, 2=wideColorEnforced
     // True HDR = bit1 set AND bit2 clear (bit2 is set when display is in WCG-only mode)
 
+    /// <summary>Returns true when the display reports advanced color (HDR) capability.</summary>
+    public static bool IsHdrSupported(uint value) => (value & 1) != 0;
+
+    /// <summary>
+    /// Returns true when HDR is actively enabled.
+    /// Requires bit1 (advancedColorEnabled) set and bit2 (wideColorEnforced) clear.
+    /// Real-world values: HDR ON = 0x3, HDR OFF = 0x7.
+    /// </summary>
+    public static bool IsHdrEnabled(uint value) => (value & 2) != 0 && (value & 4) == 0;
+
     [StructLayout(LayoutKind.Sequential)]
     private struct LUID { public uint LowPart; public int HighPart; }
 
@@ -108,10 +118,12 @@ public class HdrManager : IHdrManager
         for (int i = 0; i < paths.Length; i++)
         {
             var path = paths[i];
-            var colorInfo = GetAdvancedColorInfo(path.targetInfo.adapterId, path.targetInfo.id);
+            DISPLAYCONFIG_ADVANCED_COLOR_INFO colorInfo;
+            try { colorInfo = GetAdvancedColorInfo(path.targetInfo.adapterId, path.targetInfo.id); }
+            catch { continue; } // skip displays that fail (e.g. mid-hotplug)
 
-            bool hdrSupported = (colorInfo.value & 1) != 0;
-            bool hdrEnabled = (colorInfo.value & 2) != 0 && (colorInfo.value & 4) == 0;
+            bool hdrSupported = IsHdrSupported(colorInfo.value);
+            bool hdrEnabled   = IsHdrEnabled(colorInfo.value);
 
             if (!hdrSupported) continue;
 

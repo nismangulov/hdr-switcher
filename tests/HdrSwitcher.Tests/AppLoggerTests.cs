@@ -128,6 +128,98 @@ public class AppLoggerTests : IDisposable
         Assert.Contains("(primary)", File.ReadAllText(_logPath));
     }
 
+    [Fact]
+    public void LogScanError_writes_WARN_tag_with_source_and_exception()
+    {
+        var ex = new InvalidOperationException("disk full");
+        _logger.LogScanError("Steam", ex);
+        _logger.Dispose();
+
+        var content = File.ReadAllText(_logPath);
+        Assert.Contains("WARN", content);
+        Assert.Contains("[Steam]", content);
+        Assert.Contains("InvalidOperationException", content);
+        Assert.Contains("disk full", content);
+    }
+
+    [Fact]
+    public void LogRescan_no_changes_writes_no_changes()
+    {
+        _logger.LogRescan([]);
+        _logger.Dispose();
+
+        Assert.Contains("no changes", File.ReadAllText(_logPath));
+    }
+
+    [Fact]
+    public void LogRescan_with_new_games_writes_count_and_names()
+    {
+        var games = new List<GameInfo>
+        {
+            new("Elden Ring", @"C:\Games\EldenRing", "Steam"),
+            new("Fortnite",   @"C:\Games\Fortnite",  "Epic"),
+        };
+        _logger.LogRescan(games);
+        _logger.Dispose();
+
+        var content = File.ReadAllText(_logPath);
+        Assert.Contains("2 new game(s) found", content);
+        Assert.Contains("Elden Ring", content);
+        Assert.Contains("Fortnite", content);
+    }
+
+    [Fact]
+    public void LogRescan_with_removed_games_writes_removed_count_and_names()
+    {
+        var removed = new List<GameInfo>
+        {
+            new("Cyberpunk 2077", @"C:\Games\Cyberpunk", "Steam"),
+        };
+        _logger.LogRescan([], removed);
+        _logger.Dispose();
+
+        var content = File.ReadAllText(_logPath);
+        Assert.Contains("1 game(s) removed", content);
+        Assert.Contains("Cyberpunk 2077", content);
+    }
+
+    [Fact]
+    public void LogLibrary_writes_total_count_and_per_source_breakdown()
+    {
+        var games = new List<GameInfo>
+        {
+            new("Game A", @"C:\Steam\A",  "Steam"),
+            new("Game B", @"C:\Steam\B",  "Steam"),
+            new("Game C", @"C:\Epic\C",   "Epic"),
+            new("Game D", @"C:\Xbox\D",   "Xbox"),
+        };
+        _logger.LogLibrary(games);
+        _logger.Dispose();
+
+        var content = File.ReadAllText(_logPath);
+        Assert.Contains("LIBRARY", content);
+        Assert.Contains("4 games", content);
+        Assert.Contains("Steam: 2", content);
+        Assert.Contains("Epic: 1", content);
+        Assert.Contains("Xbox: 1", content);
+    }
+
+    [Fact]
+    public void LogLibrary_lists_each_game_with_source_and_path()
+    {
+        var games = new List<GameInfo>
+        {
+            new("Portal 2", @"C:\Steam\Portal2", "Steam"),
+        };
+        _logger.LogLibrary(games);
+        _logger.Dispose();
+
+        var content = File.ReadAllText(_logPath);
+        Assert.Contains("[Steam]", content);
+        Assert.Contains("Portal 2", content);
+        Assert.Contains(@"C:\Steam\Portal2", content);
+    }
+
     public void Dispose()
     {
         try { _logger.Dispose(); } catch { }
