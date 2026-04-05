@@ -49,14 +49,16 @@ public class GameProcessMonitor : IDisposable
 
     #endregion
 
-    // volatile: UpdateGames swaps the reference; OnForegroundChanged reads it on the UI
-    // thread. A volatile reference swap is safe and avoids locking on every focus change.
+    // Both fields are volatile: UpdateGames swaps the references; OnForegroundChanged reads
+    // them on the UI thread. Volatile reference swaps are safe and avoid locking on every
+    // focus change. _filter is written first in UpdateGames, then _games — new filter rules
+    // take effect before the new game list, which is the conservative ordering.
     private volatile List<GameInfo> _games;
+    private volatile GameFilter     _filter;
 
     private readonly Action<GameInfo> _onGameStart;
     private readonly Action<GameInfo> _onGameExit;
     private readonly AppLogger? _logger;
-    private volatile GameFilter _filter;
 
     // Kept as a field so the GC does not collect the delegate while the hook is live
     private readonly WinEventDelegate _winEventProc;
@@ -139,8 +141,8 @@ public class GameProcessMonitor : IDisposable
             var exePath = GetProcessPath((int)pid);
             if (exePath is null) return;
 
-            // Reject known non-game executables (launchers, anti-cheat, crash reporters)
-            // that live inside a game's install directory but are not the game itself.
+            // Reject executables that should never trigger HDR — built-in launchers/anti-cheat
+            // plus any user-configured blocks from GameFilter.
             if (_filter.IsBlockedExe(exePath)) return;
 
             // volatile read — no lock needed, just a reference load
