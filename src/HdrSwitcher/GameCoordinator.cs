@@ -7,10 +7,10 @@ namespace HdrSwitcher;
 /// </summary>
 public class GameCoordinator : IDisposable
 {
-    private readonly SettingsManager        _settings;
-    private readonly HdrController          _hdr;
-    private readonly AppLogger              _logger;
-    private readonly SynchronizationContext _syncContext;
+    private readonly SettingsManager _settings;
+    private readonly HdrController   _hdr;
+    private readonly AppLogger       _logger;
+    private readonly IDispatcher     _dispatcher;
 
     private volatile List<GameInfo> _currentGames = [];
     private GameFilter              _filter;
@@ -37,16 +37,14 @@ public class GameCoordinator : IDisposable
     /// <summary>Fired when a tracked game process exits. Raised from a thread-pool thread.</summary>
     public event Action<GameInfo>? GameExited;
 
-    public GameCoordinator(SettingsManager settings, HdrController hdr, AppLogger logger)
+    public GameCoordinator(SettingsManager settings, HdrController hdr, AppLogger logger,
+                           IDispatcher dispatcher)
     {
-        _settings = settings;
-        _hdr      = hdr;
-        _logger   = logger;
-        _filter   = new GameFilter(settings);
-
-        _syncContext = SynchronizationContext.Current
-            ?? throw new InvalidOperationException(
-                "GameCoordinator must be constructed on the UI thread.");
+        _settings   = settings;
+        _hdr        = hdr;
+        _logger     = logger;
+        _dispatcher = dispatcher;
+        _filter     = new GameFilter(settings);
 
         // Scan game libraries on background thread; create monitor on UI thread
         Task.Run(() =>
@@ -54,7 +52,7 @@ public class GameCoordinator : IDisposable
             var games = new GameLibraryScanner(_logger, _filter).ScanAll();
             _logger.LogLibrary(games);
 
-            _syncContext.Post(_ =>
+            _dispatcher.Post(() =>
             {
                 lock (_stateLock)
                 {
@@ -72,7 +70,7 @@ public class GameCoordinator : IDisposable
                     TimeSpan.FromMinutes(30), TimeSpan.FromMinutes(30));
 
                 LibraryChanged?.Invoke();
-            }, null);
+            });
         });
     }
 
@@ -108,7 +106,7 @@ public class GameCoordinator : IDisposable
         }
 
         // Always fire LibraryChanged on the UI thread for safe subscriber access
-        _syncContext.Post(_ => LibraryChanged?.Invoke(), null);
+        _dispatcher.Post(() => LibraryChanged?.Invoke());
     }
 
     public IReadOnlyList<GameInfo> GetCurrentGames() => _currentGames;

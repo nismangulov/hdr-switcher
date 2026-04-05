@@ -17,7 +17,10 @@ static class Program
         var       autostart   = new AutostartManager();
         var       settings    = new SettingsManager();
         using var hdr         = new HdrController(new HdrManager(), logger);
-        using var coordinator = new GameCoordinator(settings, hdr, logger);
+        var       dispatcher  = new WinFormsDispatcher(
+            SynchronizationContext.Current
+            ?? throw new InvalidOperationException("Main must run on the UI thread."));
+        using var coordinator = new GameCoordinator(settings, hdr, logger, dispatcher);
         var       form        = new SettingsForm(coordinator, autostart);
         var       tray        = new TrayApplicationContext(hdr, coordinator, logger.LogPath, () => form.Show());
 

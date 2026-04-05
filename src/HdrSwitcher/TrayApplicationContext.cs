@@ -16,7 +16,7 @@ public class TrayApplicationContext : ApplicationContext
     private readonly Action           _openSettings;
     private readonly NotifyIcon       _tray;
     private readonly ContextMenuStrip _menu;
-    private readonly SynchronizationContext _syncContext;
+    private readonly IDispatcher      _dispatcher;
 
     // Icon render cache — skip GDI+ work when neither state nor theme has changed
     private HdrState _lastIconState = (HdrState)(-1);
@@ -55,9 +55,10 @@ public class TrayApplicationContext : ApplicationContext
         _coordinator  = coordinator;
         _logPath      = logPath;
         _openSettings = openSettings;
-        _syncContext  = SynchronizationContext.Current
+        _dispatcher = new WinFormsDispatcher(
+            SynchronizationContext.Current
             ?? throw new InvalidOperationException(
-                "TrayApplicationContext must be constructed on the UI thread.");
+                "TrayApplicationContext must be constructed on the UI thread."));
 
         _menu = new ContextMenuStrip();
         Win11MenuRenderer.Apply(_menu);
@@ -74,8 +75,8 @@ public class TrayApplicationContext : ApplicationContext
         // Subscribe to state-change events
         // GameStarted/GameExited fire off the UI thread — marshal back before touching WinForms
         _hdr.StateChanged           += OnHdrStateChanged;
-        _coordinator.GameStarted    += _ => _syncContext.Post(_ => RefreshIcon(), null);
-        _coordinator.GameExited     += _ => _syncContext.Post(_ => RefreshIcon(), null);
+        _coordinator.GameStarted    += _ => _dispatcher.Post(RefreshIcon);
+        _coordinator.GameExited     += _ => _dispatcher.Post(RefreshIcon);
         _coordinator.LibraryChanged += RebuildMenu;
 
         // Re-render on theme change (dark/light mode switch)
