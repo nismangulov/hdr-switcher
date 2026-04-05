@@ -69,7 +69,7 @@ public class AppLoggerTests : IDisposable
     }
 
     [Fact]
-    public void LogGameExited_with_pre_game_state_logs_would_restore()
+    public void LogGameExited_hdr_was_off_logs_would_restore()
     {
         var game = new GameInfo("TestGame", @"C:\Games\Test", "Steam");
         var preGameDisplays = new List<DisplayInfo>
@@ -83,6 +83,20 @@ public class AppLoggerTests : IDisposable
         Assert.Contains("EXITED", content);
         Assert.Contains("would restore", content);
         Assert.Contains("LG OLED", content);
+    }
+
+    [Fact]
+    public void LogGameExited_hdr_was_on_logs_do_nothing()
+    {
+        var game = new GameInfo("TestGame", @"C:\Games\Test", "Steam");
+        var preGameDisplays = new List<DisplayInfo>
+        {
+            new(1, "LG OLED", HdrEnabled: true, IsPrimary: true),
+        };
+        _logger.LogGameExited(game, preGameDisplays);
+        _logger.Dispose();
+
+        Assert.Contains("would do nothing", File.ReadAllText(_logPath));
     }
 
     [Fact]

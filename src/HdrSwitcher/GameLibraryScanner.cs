@@ -12,6 +12,16 @@ public partial class GameLibraryScanner
 
     public GameLibraryScanner(AppLogger? logger = null) => _logger = logger;
 
+    // Steam install directory names that belong to tools or benchmarks rather than games.
+    // Steam sometimes sets type="game" in their ACF, so the type filter alone is not enough.
+    // Add new entries here when they appear in the LIBRARY log and are not actual games.
+    private static readonly HashSet<string> SteamExcludedInstallDirs = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Steamworks Shared", // Steam redistributables package
+        "3DMark",            // Benchmark tool
+        "OCCT",              // Benchmark / stress test tool
+    };
+
     public List<GameInfo> ScanAll()
     {
         var games = new List<GameInfo>();
@@ -42,8 +52,21 @@ public partial class GameLibraryScanner
 
             foreach (var acf in Directory.GetFiles(appsDir, "appmanifest_*.acf"))
             {
-                var parsed = ParseAppManifest(File.ReadAllText(acf));
+                var content = File.ReadAllText(acf);
+
+                // Skip non-game entries only when "type" is explicitly present and not "game".
+                // Most ACF files omit the field entirely — absence means game.
+                var type = AcfTypeRegex().Match(content).Groups[1].Value;
+                if (!string.IsNullOrEmpty(type) &&
+                    !string.Equals(type, "game", StringComparison.OrdinalIgnoreCase)) continue;
+
+                var parsed = ParseAppManifest(content);
                 if (parsed is null) continue;
+
+                // Skip known non-game Steam entries by install directory name.
+                // These are tools/benchmarks that Steam classifies as "game" in their ACF
+                // but should not be treated as games for HDR purposes.
+                if (SteamExcludedInstallDirs.Contains(parsed.Value.installDir)) continue;
 
                 var fullPath = Path.Combine(appsDir, "common", parsed.Value.installDir);
                 if (Directory.Exists(fullPath))
@@ -60,6 +83,9 @@ public partial class GameLibraryScanner
 
     [GeneratedRegex(@"""installdir""\s+""([^""]+)""")]
     private static partial Regex AcfInstallDirRegex();
+
+    [GeneratedRegex(@"""type""\s+""([^""]+)""")]
+    private static partial Regex AcfTypeRegex();
 
     /// <summary>
     /// Parses a <c>libraryfolders.vdf</c> and returns all unique library root paths.

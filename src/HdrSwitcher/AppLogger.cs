@@ -42,6 +42,8 @@ public class AppLogger : IDisposable
         Write($"EXITED  [{game.Source}] {game.Name}");
         if (preGameDisplays is null)
             Write($"  → no pre-game state recorded (game was running at startup) — would skip restore");
+        else if (preGameDisplays.All(d => d.HdrEnabled))
+            Write($"  → HDR was already ON before game — would do nothing");
         else
             Write($"  → would restore: {DisplaySummary(preGameDisplays)}");
     }

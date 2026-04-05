@@ -24,6 +24,11 @@ public class TrayApplicationContext : ApplicationContext
     private HdrState _lastIconState = (HdrState)(-1);
     private bool _lastIconDarkMode;
 
+    // Set before every SetHdr call so OnDisplaySettingsChanged can tell the difference
+    // between our own toggle (suppress redundant log entry) and a genuine external change.
+    // Both toggle and event handler run on the UI thread, so a plain bool is safe.
+    private bool _ownedDisplayChange;
+
     // NIM_SETVERSION — tells the shell to send NOTIFYICON_VERSION_4 messages,
     // which fixes tray icon behaviour on multi-monitor setups
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
@@ -210,10 +215,7 @@ public class TrayApplicationContext : ApplicationContext
             var before  = _hdr.GetDisplays();
             var primary = before.FirstOrDefault(d => d.IsPrimary) ?? before.FirstOrDefault();
             if (primary is null) return;
-            _hdr.SetHdr(primary.Id, !primary.HdrEnabled);
-            var after = _hdr.GetDisplays();
-            RefreshIcon(after);
-            _gameLogger.LogHdrStatus("tray toggle", after);
+            ToggleHdr(primary.Id, !primary.HdrEnabled);
         }
         catch (Exception ex)
         {
@@ -222,8 +224,24 @@ public class TrayApplicationContext : ApplicationContext
         }
     }
 
+    // Single entry point for all manual HDR changes. Sets _ownedDisplayChange so the
+    // resulting DisplaySettingsChanged event is not logged as an "external change".
+    private void ToggleHdr(uint displayId, bool enabled)
+    {
+        _ownedDisplayChange = true;
+        _hdr.SetHdr(displayId, enabled);
+        var d = _hdr.GetDisplays();
+        RefreshIcon(d);
+        _gameLogger.LogHdrStatus("tray toggle", d);
+    }
+
     private void OnDisplaySettingsChanged(object? sender, EventArgs e)
     {
+        // Swallow events caused by our own SetHdr calls — they are already logged
+        // by ToggleHdr. Genuine external changes (Windows Settings, other apps) still
+        // reach here because _ownedDisplayChange is false in those cases.
+        if (_ownedDisplayChange) { _ownedDisplayChange = false; return; }
+
         try
         {
             var displays = _hdr.GetDisplays();
@@ -244,7 +262,9 @@ public class TrayApplicationContext : ApplicationContext
 
     private void RebuildMenu()
     {
-        foreach (ToolStripItem item in _menu.Items) item.Dispose();
+        // Snapshot to array first — ToolStripItem.Dispose() removes itself from the
+        // parent collection, which would invalidate the enumerator mid-iteration.
+        foreach (var item in _menu.Items.Cast<ToolStripItem>().ToArray()) item.Dispose();
         _menu.Items.Clear();
 
         var displays = _hdr.GetDisplays();
@@ -260,13 +280,7 @@ public class TrayApplicationContext : ApplicationContext
             var capturedPrimary = primary;
             primaryItem.Click += (_, _) =>
             {
-                try
-                {
-                    _hdr.SetHdr(capturedPrimary.Id, !capturedPrimary.HdrEnabled);
-                    var d = _hdr.GetDisplays();
-                    RefreshIcon(d);
-                    _gameLogger.LogHdrStatus("tray toggle", d);
-                }
+                try { ToggleHdr(capturedPrimary.Id, !capturedPrimary.HdrEnabled); }
                 catch (Exception ex)
                 {
                     MessageBox.Show($"SetHdr failed: {ex.Message}", "HDR Switcher Error",
@@ -287,13 +301,7 @@ public class TrayApplicationContext : ApplicationContext
             var captured = display;
             item.Click += (_, _) =>
             {
-                try
-                {
-                    _hdr.SetHdr(captured.Id, !captured.HdrEnabled);
-                    var d = _hdr.GetDisplays();
-                    RefreshIcon(d);
-                    _gameLogger.LogHdrStatus("tray toggle", d);
-                }
+                try { ToggleHdr(captured.Id, !captured.HdrEnabled); }
                 catch (Exception ex)
                 {
                     MessageBox.Show($"SetHdr failed: {ex.Message}", "HDR Switcher Error",
