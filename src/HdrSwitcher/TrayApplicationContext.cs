@@ -11,9 +11,11 @@ public class TrayApplicationContext : ApplicationContext
     private readonly NotifyIcon _tray;
     private readonly ContextMenuStrip _menu;
     private readonly GameLogger _gameLogger;
-    private GameProcessMonitor? _gameMonitor; // initialized on background thread
+    private GameProcessMonitor? _gameMonitor;
+    private List<GameInfo> _currentGames = [];
     private readonly Dictionary<string, bool> _preGameHdrState = new(); // game name → HDR was on
     private readonly object _gameStateLock = new();
+    private System.Threading.Timer? _rescanTimer;
 
     // NIM_SETVERSION — tells the shell to send NOTIFYICON_VERSION_4 messages,
     // which fixes tray icon behaviour on multi-monitor setups
@@ -65,38 +67,74 @@ public class TrayApplicationContext : ApplicationContext
         // Re-render icon when accent colour or dark/light mode changes
         SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
 
-        // Game library + process logging — scan runs on a background thread to
-        // avoid blocking the UI thread with file/registry/XML I/O at startup
+        // Scan game libraries on a background thread to avoid blocking the UI thread.
+        // GameProcessMonitor must be created on the UI thread (SetWinEventHook requirement),
+        // so we post back via SynchronizationContext after the scan completes.
         _gameLogger = new GameLogger();
+        var syncContext = SynchronizationContext.Current!;
         Task.Run(() =>
         {
             var games = new GameLibraryScanner(_gameLogger).ScanAll();
             _gameLogger.LogLibrary(games);
-            _gameMonitor = new GameProcessMonitor(games,
-                onGameStart: game =>
-                {
-                    bool hdrOn = _hdr.GetDisplays().Any(d => d.HdrEnabled);
-                    lock (_gameStateLock)
-                    {
-                        // Only capture state for the first process of this game;
-                        // launchers/anti-cheat can spawn multiple tracked processes
-                        if (!_preGameHdrState.ContainsKey(game.Name))
-                            _preGameHdrState[game.Name] = hdrOn;
-                    }
-                    _gameLogger.LogGameStarted(game, hdrOn);
-                    // TODO: auto-enable HDR here once logging phase is complete
-                },
-                onGameExit: game =>
-                {
-                    bool hdrWasOn;
-                    lock (_gameStateLock)
-                    {
-                        _preGameHdrState.TryGetValue(game.Name, out hdrWasOn);
-                        _preGameHdrState.Remove(game.Name);
-                    }
-                    _gameLogger.LogGameExited(game, hdrWasOn);
-                    // TODO: auto-restore HDR here once logging phase is complete
-                });
+
+            syncContext.Post(_ =>
+            {
+                _currentGames = games;
+                _gameMonitor  = new GameProcessMonitor(games, OnGameStart, OnGameExit);
+
+                // Rescan libraries every 30 minutes to pick up newly installed games
+                _rescanTimer = new System.Threading.Timer(
+                    _ => RescanLibrary(), null,
+                    TimeSpan.FromMinutes(30), TimeSpan.FromMinutes(30));
+            }, null);
+        });
+    }
+
+    private void OnGameStart(GameInfo game)
+    {
+        bool hdrOn = _hdr.GetDisplays().Any(d => d.HdrEnabled);
+        lock (_gameStateLock)
+        {
+            if (!_preGameHdrState.ContainsKey(game.Name))
+                _preGameHdrState[game.Name] = hdrOn;
+        }
+        _gameLogger.LogGameStarted(game, hdrOn);
+        // TODO: auto-enable HDR here once logging phase is complete
+    }
+
+    private void OnGameExit(GameInfo game)
+    {
+        bool hdrWasOn;
+        lock (_gameStateLock)
+        {
+            _preGameHdrState.TryGetValue(game.Name, out hdrWasOn);
+            _preGameHdrState.Remove(game.Name);
+        }
+        _gameLogger.LogGameExited(game, hdrWasOn);
+        // TODO: auto-restore HDR here once logging phase is complete
+    }
+
+    private void RescanLibrary()
+    {
+        Task.Run(() =>
+        {
+            var updated = new GameLibraryScanner(_gameLogger).ScanAll();
+
+            var existingPaths = _currentGames
+                .Select(g => g.InstallPath)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            var newGames = updated
+                .Where(g => !existingPaths.Contains(g.InstallPath))
+                .ToList();
+
+            _gameLogger.LogRescan(newGames);
+
+            if (newGames.Count > 0)
+            {
+                _currentGames = updated;
+                _gameMonitor?.UpdateGames(updated);
+            }
         });
     }
 
@@ -260,6 +298,7 @@ public class TrayApplicationContext : ApplicationContext
         {
             SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
             SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
+            _rescanTimer?.Dispose();
             _gameMonitor?.Dispose();
             _gameLogger.Dispose();
             _tray.Icon?.Dispose();

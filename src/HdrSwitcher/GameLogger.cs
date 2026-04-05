@@ -38,6 +38,18 @@ public class GameLogger : IDisposable
     public void LogScanError(string source, Exception ex)
         => Write($"WARN    [{source}] scan failed: {ex.GetType().Name}: {ex.Message}");
 
+    public void LogRescan(IReadOnlyList<GameInfo> newGames)
+    {
+        if (newGames.Count == 0)
+            Write("Rescan complete — no new games found");
+        else
+        {
+            Write($"Rescan complete — {newGames.Count} new game(s) found:");
+            foreach (var game in newGames.OrderBy(g => g.Source).ThenBy(g => g.Name))
+                Write($"  [{game.Source}] {game.Name}  →  {game.InstallPath}");
+        }
+    }
+
     public void LogLibrary(IReadOnlyList<GameInfo> games)
     {
         var bySteam = games.Count(g => g.Source == "Steam");

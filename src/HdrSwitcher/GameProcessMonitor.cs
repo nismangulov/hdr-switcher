@@ -1,26 +1,68 @@
 using System.Management;
+using System.Runtime.InteropServices;
+using System.Text;
 
 namespace HdrSwitcher;
 
 /// <summary>
-/// Watches for game process starts and exits using WMI polling (no admin required).
-/// Fires onGameStart/onGameExit when a process whose path falls inside a known game
-/// install directory is detected.
+/// Detects game launches via SetWinEventHook (EVENT_SYSTEM_FOREGROUND) — fires instantly
+/// when a game window comes to the foreground. Detects exits via WMI process deletion
+/// (WITHIN 1 second). Must be constructed on the UI thread.
 /// </summary>
 public class GameProcessMonitor : IDisposable
 {
-    private readonly IReadOnlyList<GameInfo> _games;
+    #region Win32
+
+    private delegate void WinEventDelegate(
+        IntPtr hWinEventHook, uint eventType,
+        IntPtr hwnd, int idObject, int idChild,
+        uint dwEventThread, uint dwmsEventTime);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SetWinEventHook(
+        uint eventMin, uint eventMax, IntPtr hmodWinEventProc,
+        WinEventDelegate lpfnWinEventProc, uint idProcess, uint idThread, uint dwFlags);
+
+    [DllImport("user32.dll")]
+    private static extern bool UnhookWinEvent(IntPtr hWinEventHook);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, uint dwProcessId);
+
+    [DllImport("kernel32.dll")]
+    private static extern bool QueryFullProcessImageName(
+        IntPtr hProcess, uint dwFlags, StringBuilder lpExeName, ref uint lpdwSize);
+
+    [DllImport("kernel32.dll")]
+    private static extern bool CloseHandle(IntPtr hObject);
+
+    private const uint EVENT_SYSTEM_FOREGROUND            = 0x0003;
+    private const uint WINEVENT_OUTOFCONTEXT              = 0x0000;
+    private const uint PROCESS_QUERY_LIMITED_INFORMATION  = 0x1000;
+
+    #endregion
+
+    private List<GameInfo> _games;
+    private readonly object _gamesLock = new();
+
     private readonly Action<GameInfo> _onGameStart;
     private readonly Action<GameInfo> _onGameExit;
-    private readonly ManagementEventWatcher _startWatcher;
+
+    // Kept as a field so the GC does not collect the delegate while the hook is live
+    private readonly WinEventDelegate _winEventProc;
+    private readonly IntPtr _hookHandle;
+
     private readonly ManagementEventWatcher _stopWatcher;
 
     // pid → (game, processName) — processName guards against PID reuse
     private readonly Dictionary<int, (GameInfo Game, string ProcessName)> _activeGames = new();
-    private readonly object _lock = new();
+    private readonly object _activeGamesLock = new();
 
     public GameProcessMonitor(
-        IReadOnlyList<GameInfo> games,
+        List<GameInfo> games,
         Action<GameInfo> onGameStart,
         Action<GameInfo> onGameExit)
     {
@@ -28,47 +70,54 @@ public class GameProcessMonitor : IDisposable
         _onGameStart = onGameStart;
         _onGameExit  = onGameExit;
 
-        // WITHIN 3 = WMI polls every 3 seconds; no elevated privileges needed
-        _startWatcher = new ManagementEventWatcher(new WqlEventQuery(
-            "SELECT * FROM __InstanceCreationEvent WITHIN 3 WHERE TargetInstance ISA 'Win32_Process'"));
-        _startWatcher.EventArrived += OnProcessCreated;
-        _startWatcher.Start();
+        // Hook foreground window changes — fires instantly when a game window appears.
+        // WINEVENT_OUTOFCONTEXT delivers callbacks on the calling thread's message pump
+        // (the WinForms UI thread), so no cross-thread marshalling is needed.
+        _winEventProc = OnForegroundChanged; // must be a field — see above
+        _hookHandle   = SetWinEventHook(
+            EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
+            IntPtr.Zero, _winEventProc, 0, 0, WINEVENT_OUTOFCONTEXT);
 
+        // WMI exit detection — WITHIN 1 gives 1-second resolution without admin
         _stopWatcher = new ManagementEventWatcher(new WqlEventQuery(
-            "SELECT * FROM __InstanceDeletionEvent WITHIN 3 WHERE TargetInstance ISA 'Win32_Process'"));
+            "SELECT * FROM __InstanceDeletionEvent WITHIN 1 WHERE TargetInstance ISA 'Win32_Process'"));
         _stopWatcher.EventArrived += OnProcessDeleted;
         _stopWatcher.Start();
     }
 
-    private void OnProcessCreated(object sender, EventArrivedEventArgs e)
+    // Called on the UI thread via the WinForms message pump
+    private void OnForegroundChanged(
+        IntPtr hWinEventHook, uint eventType,
+        IntPtr hwnd, int idObject, int idChild,
+        uint dwEventThread, uint dwmsEventTime)
     {
+        if (hwnd == IntPtr.Zero) return;
         try
         {
-            var proc    = (ManagementBaseObject)e.NewEvent["TargetInstance"];
-            var exePath = proc["ExecutablePath"]?.ToString();
-            if (string.IsNullOrEmpty(exePath)) return;
+            GetWindowThreadProcessId(hwnd, out uint pid);
+            if (pid == 0) return;
 
-            var game = Match(exePath);
+            var exePath = GetProcessPath((int)pid);
+            if (exePath is null) return;
+
+            GameInfo? game;
+            lock (_gamesLock) game = Match(_games, exePath);
             if (game is null) return;
 
-            var pid     = Convert.ToInt32(proc["ProcessId"]);
-            var procName = proc["Name"]?.ToString() ?? string.Empty;
-
-            bool firstProcess;
-            lock (_lock)
+            var procName = Path.GetFileName(exePath);
+            bool isNew;
+            lock (_activeGamesLock)
             {
-                firstProcess = !_activeGames.ContainsKey(pid);
-                _activeGames[pid] = (game, procName);
+                isNew = !_activeGames.ContainsKey((int)pid);
+                if (isNew) _activeGames[(int)pid] = (game, procName);
             }
 
-            // Only fire the event for the first process of this game
-            // (launchers and anti-cheat engines can spawn multiple tracked processes)
-            if (firstProcess)
-                _onGameStart(game);
+            if (isNew) _onGameStart(game);
         }
         catch { }
     }
 
+    // Called on the WMI thread
     private void OnProcessDeleted(object sender, EventArrivedEventArgs e)
     {
         try
@@ -78,15 +127,10 @@ public class GameProcessMonitor : IDisposable
             var procName = proc["Name"]?.ToString() ?? string.Empty;
 
             GameInfo? game;
-            lock (_lock)
+            lock (_activeGamesLock)
             {
                 if (!_activeGames.TryGetValue(pid, out var entry)) return;
-
-                // Guard against PID reuse: if the process name doesn't match
-                // what we recorded at start, this is a different process
-                if (!string.Equals(entry.ProcessName, procName, StringComparison.OrdinalIgnoreCase))
-                    return;
-
+                if (!string.Equals(entry.ProcessName, procName, StringComparison.OrdinalIgnoreCase)) return;
                 _activeGames.Remove(pid);
                 game = entry.Game;
             }
@@ -96,20 +140,39 @@ public class GameProcessMonitor : IDisposable
         catch { }
     }
 
+    /// <summary>Updates the game list after a periodic library rescan.</summary>
+    public void UpdateGames(List<GameInfo> updatedGames)
+    {
+        lock (_gamesLock) _games = updatedGames;
+    }
+
+    private static string? GetProcessPath(int pid)
+    {
+        var handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, (uint)pid);
+        if (handle == IntPtr.Zero) return null;
+        try
+        {
+            var sb   = new StringBuilder(1024);
+            uint size = (uint)sb.Capacity;
+            return QueryFullProcessImageName(handle, 0, sb, ref size) ? sb.ToString() : null;
+        }
+        finally { CloseHandle(handle); }
+    }
+
     /// <summary>
     /// Returns the first game whose install path is a directory ancestor of <paramref name="exePath"/>.
+    /// Public for unit testing.
     /// </summary>
     public static GameInfo? Match(IReadOnlyList<GameInfo> games, string exePath) =>
         games.FirstOrDefault(g =>
             !string.IsNullOrEmpty(g.InstallPath) &&
             IsUnderDirectory(exePath, g.InstallPath));
 
-    private GameInfo? Match(string exePath) => Match(_games, exePath);
-
     /// <summary>
     /// Returns true when <paramref name="exePath"/> is inside <paramref name="dirPath"/>,
     /// enforcing a directory-separator boundary to prevent false prefix matches
-    /// (e.g. "Elden Ring" matching "Elden Ring GOTY").
+    /// (e.g. "Elden Ring" matching "Elden Ring GOTY Edition").
+    /// Public for unit testing.
     /// </summary>
     public static bool IsUnderDirectory(string exePath, string dirPath)
     {
@@ -120,8 +183,7 @@ public class GameProcessMonitor : IDisposable
 
     public void Dispose()
     {
-        _startWatcher.Stop();
-        _startWatcher.Dispose();
+        if (_hookHandle != IntPtr.Zero) UnhookWinEvent(_hookHandle);
         _stopWatcher.Stop();
         _stopWatcher.Dispose();
     }
