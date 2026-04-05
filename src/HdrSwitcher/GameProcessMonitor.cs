@@ -56,7 +56,7 @@ public class GameProcessMonitor : IDisposable
     private readonly Action<GameInfo> _onGameStart;
     private readonly Action<GameInfo> _onGameExit;
     private readonly AppLogger? _logger;
-    private GameFilter _filter;
+    private volatile GameFilter _filter;
 
     // Kept as a field so the GC does not collect the delegate while the hook is live
     private readonly WinEventDelegate _winEventProc;
@@ -72,7 +72,7 @@ public class GameProcessMonitor : IDisposable
     // Reused across foreground-change callbacks (UI thread only) to avoid per-event allocation
     private readonly System.Text.StringBuilder _pathBuffer = new(1024);
 
-public GameProcessMonitor(
+    public GameProcessMonitor(
         List<GameInfo> games,
         GameFilter filter,
         Action<GameInfo> onGameStart,
@@ -230,10 +230,10 @@ public GameProcessMonitor(
     /// <summary>Updates the game list after a periodic library rescan.</summary>
     public void UpdateGames(List<GameInfo> updatedGames, GameFilter filter)
     {
-        _filter = filter;
+        _filter = filter; // volatile write — new filter visible to UI/WMI threads
         var merged = new List<GameInfo>(updatedGames);
         merged.AddRange(filter.GetManualGames());
-        _games = merged; // volatile write — safe reference swap
+        _games = merged;  // volatile write — safe reference swap
         PurgeDeadEntries();
     }
 
