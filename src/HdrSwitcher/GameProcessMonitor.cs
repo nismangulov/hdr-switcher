@@ -56,6 +56,7 @@ public class GameProcessMonitor : IDisposable
     private readonly Action<GameInfo> _onGameStart;
     private readonly Action<GameInfo> _onGameExit;
     private readonly AppLogger? _logger;
+    private GameFilter _filter;
 
     // Kept as a field so the GC does not collect the delegate while the hook is live
     private readonly WinEventDelegate _winEventProc;
@@ -71,39 +72,20 @@ public class GameProcessMonitor : IDisposable
     // Reused across foreground-change callbacks (UI thread only) to avoid per-event allocation
     private readonly System.Text.StringBuilder _pathBuffer = new(1024);
 
-    // Executables that live inside game install directories but are not the game itself.
-    // Matching any of these prevents a launcher/anti-cheat/crash-reporter from triggering
-    // a false game-start event. Extend as new false positives are observed in the log.
-    private static readonly HashSet<string> KnownNonGameExes = new(StringComparer.OrdinalIgnoreCase)
-    {
-        // Launchers
-        "launcher.exe", "gamelauncher.exe", "gamelauncherhelper.exe",
-        // Crash reporters / handlers
-        "crashreporter.exe", "crashpad_handler.exe", "crashhandler.exe",
-        "crashhandler64.exe", "crash_reporter.exe", "sentry.exe",
-        // Anti-cheat / overlays
-        "easyanticheat.exe", "easyanticheat_setup.exe",
-        "battleye.exe", "beclauncher.exe",
-        "gameoverlayrenderer.exe", "gameoverlayrenderer64.exe",
-        // Unreal Engine helpers
-        "unrealcefsubprocess.exe",
-        // Installers / redistributables
-        "vc_redist.x64.exe", "vc_redist.x86.exe",
-        "dxsetup.exe", "dxwebsetup.exe",
-        "ue4prereqsetup_x64.exe", "ue4prereqsetup_x86.exe",
-        "setup.exe", "install.exe", "uninstall.exe", "unins000.exe",
-    };
-
-    public GameProcessMonitor(
+public GameProcessMonitor(
         List<GameInfo> games,
+        GameFilter filter,
         Action<GameInfo> onGameStart,
         Action<GameInfo> onGameExit,
         AppLogger? logger = null)
     {
-        _games       = games;
+        _filter      = filter;
         _onGameStart = onGameStart;
         _onGameExit  = onGameExit;
         _logger      = logger;
+        var withManual = new List<GameInfo>(games);
+        withManual.AddRange(filter.GetManualGames());
+        _games = withManual;
 
         // Hook foreground window changes — fires instantly when a game window appears.
         // WINEVENT_OUTOFCONTEXT delivers callbacks on the calling (UI) thread's message pump.
@@ -159,7 +141,7 @@ public class GameProcessMonitor : IDisposable
 
             // Reject known non-game executables (launchers, anti-cheat, crash reporters)
             // that live inside a game's install directory but are not the game itself.
-            if (KnownNonGameExes.Contains(Path.GetFileName(exePath))) return;
+            if (_filter.IsBlockedExe(exePath)) return;
 
             // volatile read — no lock needed, just a reference load
             var game = Match(_games, exePath);
@@ -220,11 +202,11 @@ public class GameProcessMonitor : IDisposable
         {
             try
             {
-                if (KnownNonGameExes.Contains(process.ProcessName + ".exe")) continue;
+                if (_filter.IsBlockedExe(process.ProcessName + ".exe")) continue;
 
                 var exePath = GetProcessPath(process.Id);
                 if (exePath is null) continue;
-                if (KnownNonGameExes.Contains(Path.GetFileName(exePath))) continue;
+                if (_filter.IsBlockedExe(exePath)) continue;
 
                 var game = Match(_games, exePath);
                 if (game is null) continue;
@@ -246,10 +228,20 @@ public class GameProcessMonitor : IDisposable
     }
 
     /// <summary>Updates the game list after a periodic library rescan.</summary>
-    public void UpdateGames(List<GameInfo> updatedGames)
+    public void UpdateGames(List<GameInfo> updatedGames, GameFilter filter)
     {
-        _games = updatedGames; // volatile write — safe reference swap
-        PurgeDeadEntries();    // clean up stale entries from crashed/killed games
+        _filter = filter;
+        var merged = new List<GameInfo>(updatedGames);
+        merged.AddRange(filter.GetManualGames());
+        _games = merged; // volatile write — safe reference swap
+        PurgeDeadEntries();
+    }
+
+    /// <summary>Returns a snapshot of PIDs of currently active games.</summary>
+    public IReadOnlySet<int> GetActiveGamePids()
+    {
+        lock (_activeGamesLock)
+            return _activeGames.Keys.ToHashSet();
     }
 
     // Removes _activeGames entries whose processes no longer exist.
