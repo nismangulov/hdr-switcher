@@ -91,4 +91,31 @@ public class GameFilterTests
         var f = new GameFilter([], manuals);
         Assert.Single(f.GetManualGames());
     }
+
+    // ── IsManualGame ──────────────────────────────────────────────────────
+
+    [Fact]
+    public void IsManualGame_returns_true_for_known_exe()
+    {
+        var filter = new GameFilter(
+            [],
+            [new ManualGame("Dolphin", @"C:\Dolphin\Dolphin.exe")]);
+        Assert.True(filter.IsManualGame(@"C:\Dolphin\Dolphin.exe"));
+    }
+
+    [Fact]
+    public void IsManualGame_is_case_insensitive()
+    {
+        var filter = new GameFilter(
+            [],
+            [new ManualGame("Dolphin", @"C:\Dolphin\Dolphin.exe")]);
+        Assert.True(filter.IsManualGame(@"c:\dolphin\dolphin.exe"));
+    }
+
+    [Fact]
+    public void IsManualGame_returns_false_for_unknown_exe()
+    {
+        var filter = new GameFilter([], []);
+        Assert.False(filter.IsManualGame(@"C:\Games\SomeGame.exe"));
+    }
 }

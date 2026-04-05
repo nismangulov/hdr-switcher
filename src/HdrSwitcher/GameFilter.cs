@@ -40,6 +40,7 @@ public sealed class GameFilter
     private readonly HashSet<string> _blockedExes;      // filenames and full paths
     private readonly HashSet<string> _blacklistedPaths; // full install paths
     private readonly List<GameInfo>  _manualGames;
+    private readonly HashSet<string> _manualExePaths;
 
     public GameFilter(SettingsManager settings)
         : this(settings.Blacklist, settings.ManualGames) { }
@@ -66,6 +67,11 @@ public sealed class GameFilter
                 Path.GetDirectoryName(m.ExePath) ?? m.ExePath,
                 "Manual"))
             .ToList();
+        _manualExePaths = new HashSet<string>(
+            manualGames
+                .Where(m => !string.IsNullOrEmpty(m.ExePath))
+                .Select(m => m.ExePath),
+            StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>True if the Steam install dir basename is a built-in excluded tool/benchmark.</summary>
@@ -86,4 +92,8 @@ public sealed class GameFilter
 
     /// <summary>Manual games as GameInfo objects (Source = "Manual").</summary>
     public IReadOnlyList<GameInfo> GetManualGames() => _manualGames;
+
+    /// <summary>True if the exe path matches a manually configured game.</summary>
+    public bool IsManualGame(string exePath) =>
+        _manualExePaths.Contains(exePath);
 }
