@@ -39,17 +39,19 @@ public class GameProcessMonitor : IDisposable
     [DllImport("kernel32.dll")]
     private static extern bool CloseHandle(IntPtr hObject);
 
-    private const uint EVENT_SYSTEM_FOREGROUND            = 0x0003;
-    private const uint WINEVENT_OUTOFCONTEXT              = 0x0000;
-    private const uint PROCESS_QUERY_LIMITED_INFORMATION  = 0x1000;
+    private const uint EVENT_SYSTEM_FOREGROUND           = 0x0003;
+    private const uint WINEVENT_OUTOFCONTEXT             = 0x0000;
+    private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
 
     #endregion
 
-    private List<GameInfo> _games;
-    private readonly object _gamesLock = new();
+    // volatile: UpdateGames swaps the reference; OnForegroundChanged reads it on the UI
+    // thread. A volatile reference swap is safe and avoids locking on every focus change.
+    private volatile List<GameInfo> _games;
 
     private readonly Action<GameInfo> _onGameStart;
     private readonly Action<GameInfo> _onGameExit;
+    private readonly GameLogger? _logger;
 
     // Kept as a field so the GC does not collect the delegate while the hook is live
     private readonly WinEventDelegate _winEventProc;
@@ -64,19 +66,26 @@ public class GameProcessMonitor : IDisposable
     public GameProcessMonitor(
         List<GameInfo> games,
         Action<GameInfo> onGameStart,
-        Action<GameInfo> onGameExit)
+        Action<GameInfo> onGameExit,
+        GameLogger? logger = null)
     {
         _games       = games;
         _onGameStart = onGameStart;
         _onGameExit  = onGameExit;
+        _logger      = logger;
 
         // Hook foreground window changes — fires instantly when a game window appears.
-        // WINEVENT_OUTOFCONTEXT delivers callbacks on the calling thread's message pump
-        // (the WinForms UI thread), so no cross-thread marshalling is needed.
-        _winEventProc = OnForegroundChanged; // must be a field — see above
+        // WINEVENT_OUTOFCONTEXT delivers callbacks on the calling (UI) thread's message pump.
+        _winEventProc = OnForegroundChanged; // must be a field — GC safety
         _hookHandle   = SetWinEventHook(
             EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
             IntPtr.Zero, _winEventProc, 0, 0, WINEVENT_OUTOFCONTEXT);
+
+        if (_hookHandle == IntPtr.Zero)
+            _logger?.LogScanError("SetWinEventHook",
+                new InvalidOperationException(
+                    "SetWinEventHook returned null — game launch detection is disabled. " +
+                    "Ensure the monitor is constructed on the UI thread."));
 
         // WMI exit detection — WITHIN 1 gives 1-second resolution without admin
         _stopWatcher = new ManagementEventWatcher(new WqlEventQuery(
@@ -100,8 +109,8 @@ public class GameProcessMonitor : IDisposable
             var exePath = GetProcessPath((int)pid);
             if (exePath is null) return;
 
-            GameInfo? game;
-            lock (_gamesLock) game = Match(_games, exePath);
+            // volatile read — no lock needed, just a reference load
+            var game = Match(_games, exePath);
             if (game is null) return;
 
             var procName = Path.GetFileName(exePath);
@@ -112,7 +121,9 @@ public class GameProcessMonitor : IDisposable
                 if (isNew) _activeGames[(int)pid] = (game, procName);
             }
 
-            if (isNew) _onGameStart(game);
+            // Offload to thread pool so GetDisplays() and future HDR toggling
+            // never block the UI message pump
+            if (isNew) Task.Run(() => _onGameStart(game));
         }
         catch { }
     }
@@ -141,10 +152,8 @@ public class GameProcessMonitor : IDisposable
     }
 
     /// <summary>Updates the game list after a periodic library rescan.</summary>
-    public void UpdateGames(List<GameInfo> updatedGames)
-    {
-        lock (_gamesLock) _games = updatedGames;
-    }
+    public void UpdateGames(List<GameInfo> updatedGames) =>
+        _games = updatedGames; // volatile write — safe reference swap
 
     private static string? GetProcessPath(int pid)
     {
@@ -152,8 +161,14 @@ public class GameProcessMonitor : IDisposable
         if (handle == IntPtr.Zero) return null;
         try
         {
-            var sb   = new StringBuilder(1024);
-            uint size = (uint)sb.Capacity;
+            // Try with a standard buffer first, retry with max extended-path size
+            // if QueryFullProcessImageName signals ERROR_INSUFFICIENT_BUFFER
+            uint size = 1024;
+            var sb = new StringBuilder((int)size);
+            if (QueryFullProcessImageName(handle, 0, sb, ref size)) return sb.ToString();
+
+            size = 32767; // max extended-length path (\\?\ prefix)
+            sb   = new StringBuilder((int)size);
             return QueryFullProcessImageName(handle, 0, sb, ref size) ? sb.ToString() : null;
         }
         finally { CloseHandle(handle); }

@@ -12,10 +12,11 @@ public class TrayApplicationContext : ApplicationContext
     private readonly ContextMenuStrip _menu;
     private readonly GameLogger _gameLogger;
     private GameProcessMonitor? _gameMonitor;
-    private List<GameInfo> _currentGames = [];
+    private volatile List<GameInfo> _currentGames = []; // written on UI + timer threads
     private readonly Dictionary<string, bool> _preGameHdrState = new(); // game name → HDR was on
     private readonly object _gameStateLock = new();
     private System.Threading.Timer? _rescanTimer;
+    private readonly CancellationTokenSource _cts = new();
 
     // NIM_SETVERSION — tells the shell to send NOTIFYICON_VERSION_4 messages,
     // which fixes tray icon behaviour on multi-monitor setups
@@ -71,7 +72,9 @@ public class TrayApplicationContext : ApplicationContext
         // GameProcessMonitor must be created on the UI thread (SetWinEventHook requirement),
         // so we post back via SynchronizationContext after the scan completes.
         _gameLogger = new GameLogger();
-        var syncContext = SynchronizationContext.Current!;
+        var syncContext = SynchronizationContext.Current
+            ?? throw new InvalidOperationException(
+                "TrayApplicationContext must be constructed on the UI thread.");
         Task.Run(() =>
         {
             var games = new GameLibraryScanner(_gameLogger).ScanAll();
@@ -80,7 +83,7 @@ public class TrayApplicationContext : ApplicationContext
             syncContext.Post(_ =>
             {
                 _currentGames = games;
-                _gameMonitor  = new GameProcessMonitor(games, OnGameStart, OnGameExit);
+                _gameMonitor  = new GameProcessMonitor(games, OnGameStart, OnGameExit, _gameLogger);
 
                 // Rescan libraries every 30 minutes to pick up newly installed games
                 _rescanTimer = new System.Threading.Timer(
@@ -114,28 +117,29 @@ public class TrayApplicationContext : ApplicationContext
         // TODO: auto-restore HDR here once logging phase is complete
     }
 
+    // Called on a thread-pool thread by System.Threading.Timer — no Task.Run needed
     private void RescanLibrary()
     {
-        Task.Run(() =>
+        if (_cts.IsCancellationRequested) return;
+
+        var updated = new GameLibraryScanner(_gameLogger).ScanAll();
+
+        // Volatile read — safe snapshot of the current list reference
+        var existingPaths = _currentGames
+            .Select(g => g.InstallPath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var newGames = updated
+            .Where(g => !existingPaths.Contains(g.InstallPath))
+            .ToList();
+
+        _gameLogger.LogRescan(newGames);
+
+        if (newGames.Count > 0 && !_cts.IsCancellationRequested)
         {
-            var updated = new GameLibraryScanner(_gameLogger).ScanAll();
-
-            var existingPaths = _currentGames
-                .Select(g => g.InstallPath)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-            var newGames = updated
-                .Where(g => !existingPaths.Contains(g.InstallPath))
-                .ToList();
-
-            _gameLogger.LogRescan(newGames);
-
-            if (newGames.Count > 0)
-            {
-                _currentGames = updated;
-                _gameMonitor?.UpdateGames(updated);
-            }
-        });
+            _currentGames = updated; // volatile write
+            _gameMonitor?.UpdateGames(updated);
+        }
     }
 
     private void RefreshIcon()
@@ -298,6 +302,7 @@ public class TrayApplicationContext : ApplicationContext
         {
             SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
             SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
+            _cts.Cancel();
             _rescanTimer?.Dispose();
             _gameMonitor?.Dispose();
             _gameLogger.Dispose();
