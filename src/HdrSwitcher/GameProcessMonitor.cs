@@ -37,11 +37,15 @@ public class GameProcessMonitor : IDisposable
         IntPtr hProcess, uint dwFlags, StringBuilder lpExeName, ref uint lpdwSize);
 
     [DllImport("kernel32.dll")]
+    private static extern bool GetExitCodeProcess(IntPtr hProcess, out uint lpExitCode);
+
+    [DllImport("kernel32.dll")]
     private static extern bool CloseHandle(IntPtr hObject);
 
     private const uint EVENT_SYSTEM_FOREGROUND           = 0x0003;
     private const uint WINEVENT_OUTOFCONTEXT             = 0x0000;
     private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+    private const uint STILL_ACTIVE                      = 259;
 
     #endregion
 
@@ -58,10 +62,14 @@ public class GameProcessMonitor : IDisposable
     private readonly IntPtr _hookHandle;
 
     private readonly ManagementEventWatcher _stopWatcher;
+    private volatile bool _disposed;
 
     // pid → (game, processName) — processName guards against PID reuse
     private readonly Dictionary<int, (GameInfo Game, string ProcessName)> _activeGames = new();
     private readonly object _activeGamesLock = new();
+
+    // Reused across foreground-change callbacks (UI thread only) to avoid per-event allocation
+    private readonly System.Text.StringBuilder _pathBuffer = new(1024);
 
     public GameProcessMonitor(
         List<GameInfo> games,
@@ -106,6 +114,13 @@ public class GameProcessMonitor : IDisposable
             GetWindowThreadProcessId(hwnd, out uint pid);
             if (pid == 0) return;
 
+            // Skip the expensive path query if we're already tracking this PID —
+            // most foreground events are non-game processes, so this exits early cheaply.
+            lock (_activeGamesLock)
+            {
+                if (_activeGames.ContainsKey((int)pid)) return;
+            }
+
             var exePath = GetProcessPath((int)pid);
             if (exePath is null) return;
 
@@ -114,16 +129,20 @@ public class GameProcessMonitor : IDisposable
             if (game is null) return;
 
             var procName = Path.GetFileName(exePath);
-            bool isNew;
             lock (_activeGamesLock)
             {
-                isNew = !_activeGames.ContainsKey((int)pid);
-                if (isNew) _activeGames[(int)pid] = (game, procName);
+                // Double-check: another event may have beaten us between the two lock sections
+                if (_activeGames.ContainsKey((int)pid)) return;
+                _activeGames[(int)pid] = (game, procName);
             }
 
             // Offload to thread pool so GetDisplays() and future HDR toggling
             // never block the UI message pump
-            if (isNew) Task.Run(() => _onGameStart(game));
+            Task.Run(() =>
+            {
+                try { _onGameStart(game); }
+                catch (Exception ex) { _logger?.LogScanError("GameStart", ex); }
+            });
         }
         catch (Exception ex) { _logger?.LogScanError("ForegroundHook", ex); }
     }
@@ -152,24 +171,61 @@ public class GameProcessMonitor : IDisposable
     }
 
     /// <summary>Updates the game list after a periodic library rescan.</summary>
-    public void UpdateGames(List<GameInfo> updatedGames) =>
+    public void UpdateGames(List<GameInfo> updatedGames)
+    {
         _games = updatedGames; // volatile write — safe reference swap
+        PurgeDeadEntries();    // clean up stale entries from crashed/killed games
+    }
 
-    private static string? GetProcessPath(int pid)
+    // Removes _activeGames entries whose processes no longer exist.
+    // Called on the rescan timer thread (every 30 min) — infrequent enough that
+    // the per-entry OpenProcess overhead is negligible.
+    private void PurgeDeadEntries()
+    {
+        lock (_activeGamesLock)
+        {
+            var dead = _activeGames.Keys.Where(pid => !IsProcessAlive(pid)).ToList();
+            foreach (var pid in dead)
+                _activeGames.Remove(pid);
+        }
+    }
+
+    private static bool IsProcessAlive(int pid)
+    {
+        var handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, (uint)pid);
+        if (handle == IntPtr.Zero) return false;
+        try
+        {
+            // GetExitCodeProcess distinguishes "still running" (STILL_ACTIVE=259)
+            // from "PID recycled to a different process that happens to be alive".
+            // OpenProcess alone would return a valid handle for a recycled PID.
+            return GetExitCodeProcess(handle, out uint exitCode) && exitCode == STILL_ACTIVE;
+        }
+        finally { CloseHandle(handle); }
+    }
+
+    // Instance method so it can reuse _pathBuffer (UI thread only — safe without locking).
+    private string? GetProcessPath(int pid)
     {
         var handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, (uint)pid);
         if (handle == IntPtr.Zero) return null;
         try
         {
-            // Try with a standard buffer first, retry with max extended-path size
-            // if QueryFullProcessImageName signals ERROR_INSUFFICIENT_BUFFER
-            uint size = 1024;
-            var sb = new StringBuilder((int)size);
-            if (QueryFullProcessImageName(handle, 0, sb, ref size)) return sb.ToString();
+            // Try with the reused 1 KB buffer first; on failure grow to the max
+            // extended-path size and retry (rare — most paths fit in 1 KB).
+            uint size = (uint)_pathBuffer.Capacity;
+            _pathBuffer.Clear();
+            if (QueryFullProcessImageName(handle, 0, _pathBuffer, ref size))
+                return _pathBuffer.ToString();
 
+            // Grow once to the max extended-path size and stay there for the
+            // lifetime of the monitor — subsequent calls skip the first-stage
+            // attempt but avoid re-allocating 32 KB on every foreground event.
             size = 32767; // max extended-length path (\\?\ prefix)
-            sb   = new StringBuilder((int)size);
-            return QueryFullProcessImageName(handle, 0, sb, ref size) ? sb.ToString() : null;
+            _pathBuffer.EnsureCapacity((int)size);
+            _pathBuffer.Clear();
+            return QueryFullProcessImageName(handle, 0, _pathBuffer, ref size)
+                ? _pathBuffer.ToString() : null;
         }
         finally { CloseHandle(handle); }
     }
@@ -198,6 +254,8 @@ public class GameProcessMonitor : IDisposable
 
     public void Dispose()
     {
+        if (_disposed) return;
+        _disposed = true;
         if (_hookHandle != IntPtr.Zero) UnhookWinEvent(_hookHandle);
         _stopWatcher.Stop();
         _stopWatcher.Dispose();

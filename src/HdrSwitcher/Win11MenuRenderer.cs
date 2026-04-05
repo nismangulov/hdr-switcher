@@ -12,6 +12,11 @@ internal class Win11MenuRenderer : ToolStripProfessionalRenderer
     private const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
     private const int DWMWCP_ROUND = 2;
 
+    // Single font instance for the app lifetime. WinForms does NOT dispose fonts set via
+    // Control.Font externally — that is the caller's responsibility — so static readonly is
+    // the correct ownership model here: one allocation, freed by the finalizer at process exit.
+    private static readonly Font MenuFont = new("Segoe UI Variable Text", 10f);
+
     // Colours are read dynamically so theme changes take effect without recreating the renderer
     private static Color BgColor     => ThemeHelper.IsDarkMode ? Color.FromArgb(255, 31, 31, 31)    : Color.FromArgb(255, 243, 243, 243);
     private static Color HoverColor  => ThemeHelper.IsDarkMode ? Color.FromArgb(255, 55, 55, 55)    : Color.FromArgb(255, 210, 210, 210);
@@ -26,7 +31,7 @@ internal class Win11MenuRenderer : ToolStripProfessionalRenderer
         menu.ShowImageMargin = false;
         menu.ShowCheckMargin = true;
         menu.Padding = new Padding(4, 4, 4, 4);
-        menu.Font = new Font("Segoe UI Variable Text", 10f);
+        menu.Font = MenuFont;
         menu.HandleCreated += (s, _) =>
         {
             int pref = DWMWCP_ROUND;

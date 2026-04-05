@@ -47,14 +47,23 @@ public class AppLogger : IDisposable
     public void LogScanError(string source, Exception ex)
         => Write($"WARN    [{source}] scan failed: {ex.GetType().Name}: {ex.Message}");
 
-    public void LogRescan(IReadOnlyList<GameInfo> newGames)
+    public void LogRescan(IReadOnlyList<GameInfo> newGames, IReadOnlyList<GameInfo>? removedGames = null)
     {
-        if (newGames.Count == 0)
-            Write("RESCAN  no new games found");
-        else
+        if (newGames.Count == 0 && (removedGames is null || removedGames.Count == 0))
+        {
+            Write("RESCAN  no changes");
+            return;
+        }
+        if (newGames.Count > 0)
         {
             Write($"RESCAN  {newGames.Count} new game(s) found:");
             foreach (var game in newGames.OrderBy(g => g.Source).ThenBy(g => g.Name))
+                Write($"  [{game.Source}] {game.Name}  →  {game.InstallPath}");
+        }
+        if (removedGames is { Count: > 0 })
+        {
+            Write($"RESCAN  {removedGames.Count} game(s) removed:");
+            foreach (var game in removedGames.OrderBy(g => g.Source).ThenBy(g => g.Name))
                 Write($"  [{game.Source}] {game.Name}  →  {game.InstallPath}");
         }
     }

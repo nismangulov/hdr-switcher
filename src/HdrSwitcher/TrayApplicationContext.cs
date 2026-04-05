@@ -13,10 +13,14 @@ public class TrayApplicationContext : ApplicationContext
     private readonly AppLogger _gameLogger;
     private GameProcessMonitor? _gameMonitor;
     private volatile List<GameInfo> _currentGames = []; // written on UI + timer threads
-    private readonly Dictionary<string, bool> _preGameHdrState = new(); // game name → HDR was on
+    private readonly Dictionary<string, bool> _preGameHdrState = new(); // install path → HDR was on
     private readonly object _gameStateLock = new();
     private System.Threading.Timer? _rescanTimer;
     private readonly CancellationTokenSource _cts = new();
+
+    // Icon render cache — skip GDI+ work when state and theme haven't changed
+    private HdrState _lastIconState = (HdrState)(-1);
+    private bool _lastIconDarkMode;
 
     // NIM_SETVERSION — tells the shell to send NOTIFYICON_VERSION_4 messages,
     // which fixes tray icon behaviour on multi-monitor setups
@@ -100,8 +104,8 @@ public class TrayApplicationContext : ApplicationContext
         bool hdrOn = _hdr.GetDisplays().Any(d => d.HdrEnabled);
         lock (_gameStateLock)
         {
-            if (!_preGameHdrState.ContainsKey(game.Name))
-                _preGameHdrState[game.Name] = hdrOn;
+            if (!_preGameHdrState.ContainsKey(game.InstallPath))
+                _preGameHdrState[game.InstallPath] = hdrOn;
         }
         _gameLogger.LogGameStarted(game, hdrOn);
         // TODO: auto-enable HDR here once logging phase is complete
@@ -113,14 +117,18 @@ public class TrayApplicationContext : ApplicationContext
         // the WMI callback thread unblocked for future HDR-restore work
         Task.Run(() =>
         {
-            bool hdrWasOn;
-            lock (_gameStateLock)
+            try
             {
-                _preGameHdrState.TryGetValue(game.Name, out hdrWasOn);
-                _preGameHdrState.Remove(game.Name);
+                bool hdrWasOn;
+                lock (_gameStateLock)
+                {
+                    _preGameHdrState.TryGetValue(game.InstallPath, out hdrWasOn);
+                    _preGameHdrState.Remove(game.InstallPath);
+                }
+                _gameLogger.LogGameExited(game, hdrWasOn);
+                // TODO: auto-restore HDR here once logging phase is complete
             }
-            _gameLogger.LogGameExited(game, hdrWasOn);
-            // TODO: auto-restore HDR here once logging phase is complete
+            catch (Exception ex) { _gameLogger.LogScanError("GameExit", ex); }
         });
     }
 
@@ -132,20 +140,24 @@ public class TrayApplicationContext : ApplicationContext
         var updated = new GameLibraryScanner(_gameLogger).ScanAll();
 
         // Volatile read — safe snapshot of the current list reference
-        var existingPaths = _currentGames
+        var snapshot     = _currentGames;
+        var existingPaths = snapshot
+            .Select(g => g.InstallPath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var updatedPaths = updated
             .Select(g => g.InstallPath)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var newGames = updated
-            .Where(g => !existingPaths.Contains(g.InstallPath))
-            .ToList();
+        var newGames     = updated .Where(g => !existingPaths.Contains(g.InstallPath)).ToList();
+        var removedGames = snapshot.Where(g => !updatedPaths .Contains(g.InstallPath)).ToList();
 
-        _gameLogger.LogRescan(newGames);
+        _gameLogger.LogRescan(newGames, removedGames);
 
-        if (newGames.Count > 0 && !_cts.IsCancellationRequested)
+        if (!_cts.IsCancellationRequested)
         {
+            // Always update — the list may have shrunk if games were uninstalled.
             // Lock the paired write so two concurrent rescan callbacks (however unlikely
-            // at a 30-minute interval) cannot interleave their list and monitor updates
+            // at a 30-minute interval) cannot interleave their list and monitor updates.
             lock (_gameStateLock)
             {
                 _currentGames = updated; // volatile write
@@ -163,10 +175,6 @@ public class TrayApplicationContext : ApplicationContext
             : displays.All(d => !d.HdrEnabled) ? HdrState.AllOff
             : HdrState.Mixed;
 
-        var oldIcon = _tray.Icon;
-        _tray.Icon = IconRenderer.RenderMultiSize(state);
-        oldIcon?.Dispose();
-
         _tray.Text = state switch
         {
             HdrState.AllOn  => "HDR Switcher — All On",
@@ -174,6 +182,16 @@ public class TrayApplicationContext : ApplicationContext
             HdrState.Mixed  => "HDR Switcher — Mixed",
             _               => "HDR Switcher"
         };
+
+        // Skip the GDI+ render if neither state nor theme has changed
+        bool dark = ThemeHelper.IsDarkMode;
+        if (state == _lastIconState && dark == _lastIconDarkMode) return;
+        _lastIconState   = state;
+        _lastIconDarkMode = dark;
+
+        var oldIcon = _tray.Icon;
+        _tray.Icon = IconRenderer.RenderMultiSize(state);
+        oldIcon?.Dispose();
     }
 
     private void OnTrayClick(object? sender, MouseEventArgs e)
@@ -199,19 +217,27 @@ public class TrayApplicationContext : ApplicationContext
 
     private void OnDisplaySettingsChanged(object? sender, EventArgs e)
     {
-        var displays = _hdr.GetDisplays();
-        RefreshIcon(displays);
-        _gameLogger.LogHdrStatus("external change", displays);
+        try
+        {
+            var displays = _hdr.GetDisplays();
+            RefreshIcon(displays);
+            _gameLogger.LogHdrStatus("external change", displays);
+        }
+        catch (Exception ex) { _gameLogger.LogScanError("DisplaySettingsChanged", ex); }
     }
 
     private void OnUserPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)
     {
         if (e.Category is UserPreferenceCategory.General or UserPreferenceCategory.Color)
-            RefreshIcon();
+        {
+            try { RefreshIcon(); }
+            catch (Exception ex) { _gameLogger.LogScanError("UserPreferenceChanged", ex); }
+        }
     }
 
     private void RebuildMenu()
     {
+        foreach (ToolStripItem item in _menu.Items) item.Dispose();
         _menu.Items.Clear();
 
         var displays = _hdr.GetDisplays();
@@ -227,10 +253,18 @@ public class TrayApplicationContext : ApplicationContext
             var capturedPrimary = primary;
             primaryItem.Click += (_, _) =>
             {
-                _hdr.SetHdr(capturedPrimary.Id, !capturedPrimary.HdrEnabled);
-                var d = _hdr.GetDisplays();
-                RefreshIcon(d);
-                _gameLogger.LogHdrStatus("tray toggle", d);
+                try
+                {
+                    _hdr.SetHdr(capturedPrimary.Id, !capturedPrimary.HdrEnabled);
+                    var d = _hdr.GetDisplays();
+                    RefreshIcon(d);
+                    _gameLogger.LogHdrStatus("tray toggle", d);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"SetHdr failed: {ex.Message}", "HDR Switcher Error",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
             };
         }
         _menu.Items.Add(primaryItem);
@@ -336,6 +370,4 @@ public class TrayApplicationContext : ApplicationContext
         }
         base.Dispose(disposing);
     }
-
-
 }
