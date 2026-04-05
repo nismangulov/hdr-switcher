@@ -1,6 +1,6 @@
 namespace HdrSwitcher;
 
-public class GameLogger : IDisposable
+public class AppLogger : IDisposable
 {
     private readonly StreamWriter _writer;
     private readonly object _lock = new();
@@ -8,9 +8,9 @@ public class GameLogger : IDisposable
 
     public string LogPath { get; }
 
-    public GameLogger() : this(Path.Combine(AppContext.BaseDirectory, "game-log.txt")) { }
+    public AppLogger() : this(Path.Combine(AppContext.BaseDirectory, "hdr-switcher.log")) { }
 
-    public GameLogger(string logPath)
+    public AppLogger(string logPath)
     {
         LogPath = logPath;
         _writer = new StreamWriter(logPath, append: true) { AutoFlush = true };

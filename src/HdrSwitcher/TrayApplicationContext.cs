@@ -10,7 +10,7 @@ public class TrayApplicationContext : ApplicationContext
     private readonly AutostartManager _autostart;
     private readonly NotifyIcon _tray;
     private readonly ContextMenuStrip _menu;
-    private readonly GameLogger _gameLogger;
+    private readonly AppLogger _gameLogger;
     private GameProcessMonitor? _gameMonitor;
     private volatile List<GameInfo> _currentGames = []; // written on UI + timer threads
     private readonly Dictionary<string, bool> _preGameHdrState = new(); // game name → HDR was on
@@ -71,7 +71,7 @@ public class TrayApplicationContext : ApplicationContext
         // Scan game libraries on a background thread to avoid blocking the UI thread.
         // GameProcessMonitor must be created on the UI thread (SetWinEventHook requirement),
         // so we post back via SynchronizationContext after the scan completes.
-        _gameLogger = new GameLogger();
+        _gameLogger = new AppLogger();
         _gameLogger.LogHdrStatus("startup", _hdr.GetDisplays());
 
         var syncContext = SynchronizationContext.Current
@@ -260,7 +260,7 @@ public class TrayApplicationContext : ApplicationContext
         };
         _menu.Items.Add(autostartItem);
 
-        var logItem = new ToolStripMenuItem("Open game log");
+        var logItem = new ToolStripMenuItem("Open log");
         logItem.Click += (_, _) =>
         {
             if (File.Exists(_gameLogger.LogPath))

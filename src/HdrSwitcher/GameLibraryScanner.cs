@@ -8,9 +8,9 @@ public record GameInfo(string Name, string InstallPath, string Source);
 
 public class GameLibraryScanner
 {
-    private readonly GameLogger? _logger;
+    private readonly AppLogger? _logger;
 
-    public GameLibraryScanner(GameLogger? logger = null) => _logger = logger;
+    public GameLibraryScanner(AppLogger? logger = null) => _logger = logger;
 
     public List<GameInfo> ScanAll()
     {

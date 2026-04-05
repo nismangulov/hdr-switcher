@@ -51,7 +51,7 @@ public class GameProcessMonitor : IDisposable
 
     private readonly Action<GameInfo> _onGameStart;
     private readonly Action<GameInfo> _onGameExit;
-    private readonly GameLogger? _logger;
+    private readonly AppLogger? _logger;
 
     // Kept as a field so the GC does not collect the delegate while the hook is live
     private readonly WinEventDelegate _winEventProc;
@@ -67,7 +67,7 @@ public class GameProcessMonitor : IDisposable
         List<GameInfo> games,
         Action<GameInfo> onGameStart,
         Action<GameInfo> onGameExit,
-        GameLogger? logger = null)
+        AppLogger? logger = null)
     {
         _games       = games;
         _onGameStart = onGameStart;

@@ -1,15 +1,15 @@
 namespace HdrSwitcher.Tests;
 
-public class GameLoggerTests : IDisposable
+public class AppLoggerTests : IDisposable
 {
     private readonly string _logPath;
-    private readonly GameLogger _logger;
+    private readonly AppLogger _logger;
 
-    public GameLoggerTests()
+    public AppLoggerTests()
     {
         _logPath = Path.GetTempFileName();
-        File.Delete(_logPath); // GameLogger creates it fresh
-        _logger = new GameLogger(_logPath);
+        File.Delete(_logPath); // AppLogger creates it fresh
+        _logger = new AppLogger(_logPath);
     }
 
     [Fact]
