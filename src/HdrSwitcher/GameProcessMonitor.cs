@@ -148,6 +148,7 @@ public class GameProcessMonitor : IDisposable
             // volatile read — no lock needed, just a reference load
             var game = Match(_games, exePath);
             if (game is null) return;
+            if (_filter.IsBlacklistedPath(game.InstallPath)) return;
 
             var procName = Path.GetFileName(exePath);
             lock (_activeGamesLock)
@@ -212,6 +213,7 @@ public class GameProcessMonitor : IDisposable
 
                 var game = Match(_games, exePath);
                 if (game is null) continue;
+                if (_filter.IsBlacklistedPath(game.InstallPath)) continue;
 
                 var procName = Path.GetFileName(exePath);
                 lock (_activeGamesLock)

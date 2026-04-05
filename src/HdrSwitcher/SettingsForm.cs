@@ -16,7 +16,6 @@ public class SettingsForm : Form
     private List<ManualGame> _pendingManualGames = [];
 
     // Controls
-    private TabControl  _tabs            = null!;
     private ListView    _gamesListView   = null!;
     private Button      _refreshButton   = null!;
     private Button      _blacklistButton = null!;
@@ -39,67 +38,65 @@ public class SettingsForm : Form
 
     public SettingsForm(GameCoordinator coordinator, AutostartManager autostart)
     {
-        _coordinator = coordinator;
-        _autostart   = autostart;
+        _coordinator  = coordinator;
+        _autostart    = autostart;
+        AutoScaleMode = AutoScaleMode.None;
         BuildUI();
     }
 
     private void BuildUI()
     {
-        Text             = "HDR Switcher — Settings";
-        Size             = new Size(560, 480);
-        FormBorderStyle  = FormBorderStyle.FixedSingle;
-        MaximizeBox      = false;
-        MinimizeBox      = false;
-        ShowInTaskbar    = false;
-        StartPosition    = FormStartPosition.CenterScreen;
+        Text            = "HDR Switcher — Settings";
+        Size            = new Size(800, 640);
+        FormBorderStyle = FormBorderStyle.FixedSingle;
+        MaximizeBox     = false;
+        MinimizeBox     = false;
+        ShowInTaskbar   = false;
+        StartPosition   = FormStartPosition.CenterScreen;
 
         ApplyTheme();
 
-        // ── Tab control ──────────────────────────────────────────────────────
-        _tabs = new TabControl { Dock = DockStyle.Fill };
-        _tabs.TabPages.Add(BuildGamesTab());
-        _tabs.TabPages.Add(BuildBlacklistTab());
-        _tabs.TabPages.Add(BuildManualTab());
-
         // ── Bottom panel (Autostart + Save/Cancel) ───────────────────────────
-        var bottomPanel = new Panel
-        {
-            Dock   = DockStyle.Bottom,
-            Height = 48,
-        };
+        var bottomPanel = new Panel { Dock = DockStyle.Bottom, Height = 56 };
         ApplyPanelTheme(bottomPanel);
 
         _autostartCheckbox = new CheckBox
         {
             Text     = "Start with Windows",
             AutoSize = true,
-            Location = new Point(12, 14),
+            Anchor   = AnchorStyles.Left | AnchorStyles.Top,
+            Location = new Point(14, 14),
         };
         ApplyControlTheme(_autostartCheckbox);
         _autostartCheckbox.CheckedChanged += OnAutostartChanged;
 
-        _saveButton = new Button
-        {
-            Text     = "Save",
-            Size     = new Size(80, 28),
-            Location = new Point(460 - 80 - 88, 10),
-            Anchor   = AnchorStyles.Right | AnchorStyles.Bottom,
-        };
-        _saveButton.Click += OnSave;
-
         _cancelButton = new Button
         {
-            Text     = "Cancel",
-            Size     = new Size(80, 28),
-            Location = new Point(460 - 80, 10),
-            Anchor   = AnchorStyles.Right | AnchorStyles.Bottom,
+            Text   = "Cancel",
+            Size   = new Size(92, 32),
+            Anchor = AnchorStyles.Right | AnchorStyles.Top,
         };
+        _cancelButton.Location = new Point(bottomPanel.Width - _cancelButton.Width - 12, 12);
         _cancelButton.Click += (_, _) => { DiscardEdits(); Hide(); };
+
+        _saveButton = new Button
+        {
+            Text   = "Save",
+            Size   = new Size(92, 32),
+            Anchor = AnchorStyles.Right | AnchorStyles.Top,
+        };
+        _saveButton.Location = new Point(_cancelButton.Left - _saveButton.Width - 8, 12);
+        _saveButton.Click += OnSave;
 
         bottomPanel.Controls.AddRange([_autostartCheckbox, _saveButton, _cancelButton]);
 
-        Controls.Add(_tabs);
+        // ── Tab control ──────────────────────────────────────────────────────
+        var tabs = new TabControl { Dock = DockStyle.Fill };
+        tabs.TabPages.Add(BuildGamesTab());
+        tabs.TabPages.Add(BuildBlacklistTab());
+        tabs.TabPages.Add(BuildManualTab());
+
+        Controls.Add(tabs);
         Controls.Add(bottomPanel); // added after tabs so it renders on top
     }
 
@@ -110,28 +107,24 @@ public class SettingsForm : Form
         var page = new TabPage("Games");
         ApplyPanelTheme(page);
 
-        _gamesListView = new ListView
+        // Top bar: Blacklist + Refresh buttons
+        var topBar = new Panel { Dock = DockStyle.Top, Height = 44 };
+        ApplyPanelTheme(topBar);
+
+        _blacklistButton = new Button
         {
-            View          = View.Details,
-            FullRowSelect = true,
-            GridLines     = false,
-            MultiSelect   = false,
-            Dock          = DockStyle.None,
-            Location      = new Point(8, 38),
-            Size          = new Size(520, 318),
+            Text    = "Blacklist",
+            Size    = new Size(96, 30),
+            Anchor  = AnchorStyles.Top | AnchorStyles.Right,
+            Enabled = false,
         };
-        _gamesListView.Columns.Add("Game",    280);
-        _gamesListView.Columns.Add("Store",    70);
-        _gamesListView.Columns.Add("Running",  60);
-        _gamesListView.SelectedIndexChanged += (_, _) =>
-            _blacklistButton.Enabled = _gamesListView.SelectedItems.Count > 0;
-        ApplyListViewTheme(_gamesListView);
+        _blacklistButton.Click += OnBlacklistSelectedGame;
 
         _refreshButton = new Button
         {
-            Text     = "↺ Refresh",
-            Size     = new Size(88, 26),
-            Location = new Point(440, 8),
+            Text   = "↺ Refresh",
+            Size   = new Size(96, 30),
+            Anchor = AnchorStyles.Top | AnchorStyles.Right,
         };
         _refreshButton.Click += (_, _) =>
         {
@@ -139,16 +132,33 @@ public class SettingsForm : Form
             LoadGamesTab();
         };
 
-        _blacklistButton = new Button
+        // Position buttons right-aligned after topBar has its final width
+        topBar.SizeChanged += (_, _) =>
         {
-            Text     = "Blacklist",
-            Size     = new Size(80, 26),
-            Location = new Point(348, 8),
-            Enabled  = false,
+            _refreshButton.Location   = new Point(topBar.Width - _refreshButton.Width - 8, 7);
+            _blacklistButton.Location = new Point(_refreshButton.Left - _blacklistButton.Width - 6, 7);
         };
-        _blacklistButton.Click += OnBlacklistSelectedGame;
 
-        page.Controls.AddRange([_gamesListView, _refreshButton, _blacklistButton]);
+        topBar.Controls.AddRange([_blacklistButton, _refreshButton]);
+
+        _gamesListView = new ListView
+        {
+            Dock          = DockStyle.Fill,
+            View          = View.Details,
+            FullRowSelect = true,
+            GridLines     = false,
+            MultiSelect   = false,
+        };
+        _gamesListView.Columns.Add("Game",    420);
+        _gamesListView.Columns.Add("Store",    90);
+        _gamesListView.Columns.Add("Running",  70);
+        _gamesListView.SelectedIndexChanged += (_, _) =>
+            _blacklistButton.Enabled = _gamesListView.SelectedItems.Count > 0;
+        ApplyListViewTheme(_gamesListView);
+
+        // Add Fill control first, then Top — Fill gets the remaining space
+        page.Controls.Add(_gamesListView);
+        page.Controls.Add(topBar);
         return page;
     }
 
@@ -162,7 +172,7 @@ public class SettingsForm : Form
         _gamesListView.Items.Clear();
         foreach (var g in games.OrderBy(g => g.Name))
         {
-            if (bl.Contains(g.InstallPath)) continue; // hide already-blacklisted entries
+            if (bl.Contains(g.InstallPath)) continue;
             var item = new ListViewItem(g.Name);
             item.SubItems.Add(g.Source);
             item.SubItems.Add(activePaths.Contains(g.InstallPath) ? "●" : "");
@@ -191,42 +201,56 @@ public class SettingsForm : Form
         var page = new TabPage("Blacklist");
         ApplyPanelTheme(page);
 
+        // Bottom bar: text input + Add/Remove buttons
+        var bottomBar = new Panel { Dock = DockStyle.Bottom, Height = 44 };
+        ApplyPanelTheme(bottomBar);
+
+        _blacklistInput = new TextBox
+        {
+            Anchor          = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top,
+            Location        = new Point(8, 8),
+            Height          = 26,
+            PlaceholderText = "Executable name (launcher.exe) or full install path…",
+        };
+        ApplyTextBoxTheme(_blacklistInput);
+
+        _blRemoveButton = new Button
+        {
+            Text    = "Remove",
+            Size    = new Size(92, 30),
+            Anchor  = AnchorStyles.Right | AnchorStyles.Top,
+            Enabled = false,
+        };
+        _blRemoveButton.Click += OnBlacklistRemove;
+
+        _blAddButton = new Button
+        {
+            Text   = "+ Add",
+            Size   = new Size(80, 30),
+            Anchor = AnchorStyles.Right | AnchorStyles.Top,
+        };
+        _blAddButton.Click += OnBlacklistAdd;
+
+        bottomBar.SizeChanged += (_, _) =>
+        {
+            _blRemoveButton.Location  = new Point(bottomBar.Width - _blRemoveButton.Width - 8, 7);
+            _blAddButton.Location     = new Point(_blRemoveButton.Left - _blAddButton.Width - 6, 7);
+            _blacklistInput.Width     = _blAddButton.Left - 16;
+        };
+
+        bottomBar.Controls.AddRange([_blacklistInput, _blAddButton, _blRemoveButton]);
+
         _blacklistBox = new ListBox
         {
-            Location      = new Point(8, 8),
-            Size          = new Size(520, 310),
+            Dock          = DockStyle.Fill,
             SelectionMode = SelectionMode.One,
         };
         _blacklistBox.SelectedIndexChanged += (_, _) =>
             _blRemoveButton.Enabled = _blacklistBox.SelectedIndex >= 0;
         ApplyListBoxTheme(_blacklistBox);
 
-        _blacklistInput = new TextBox
-        {
-            Location        = new Point(8, 326),
-            Size            = new Size(380, 23),
-            PlaceholderText = "Executable name (launcher.exe) or full install path…",
-        };
-        ApplyTextBoxTheme(_blacklistInput);
-
-        _blAddButton = new Button
-        {
-            Text     = "+ Add",
-            Size     = new Size(60, 26),
-            Location = new Point(396, 324),
-        };
-        _blAddButton.Click += OnBlacklistAdd;
-
-        _blRemoveButton = new Button
-        {
-            Text     = "Remove",
-            Size     = new Size(66, 26),
-            Location = new Point(462, 324),
-            Enabled  = false,
-        };
-        _blRemoveButton.Click += OnBlacklistRemove;
-
-        page.Controls.AddRange([_blacklistBox, _blacklistInput, _blAddButton, _blRemoveButton]);
+        page.Controls.Add(_blacklistBox);
+        page.Controls.Add(bottomBar);
         return page;
     }
 
@@ -255,6 +279,7 @@ public class SettingsForm : Form
         if (_blacklistBox.SelectedIndex < 0) return;
         _pendingBlacklist.RemoveAt(_blacklistBox.SelectedIndex);
         LoadBlacklistTab();
+        LoadGamesTab();
     }
 
     // ── Manually Added tab ────────────────────────────────────────────────────
@@ -264,71 +289,85 @@ public class SettingsForm : Form
         var page = new TabPage("Manually Added");
         ApplyPanelTheme(page);
 
-        _manualListView = new ListView
-        {
-            View          = View.Details,
-            FullRowSelect = true,
-            MultiSelect   = false,
-            Location      = new Point(8, 8),
-            Size          = new Size(520, 280),
-        };
-        _manualListView.Columns.Add("Name", 180);
-        _manualListView.Columns.Add("Path", 330);
-        _manualListView.SelectedIndexChanged += (_, _) =>
-            _manualRemoveButton.Enabled = _manualListView.SelectedItems.Count > 0;
-        ApplyListViewTheme(_manualListView);
+        // Bottom bar: two input rows stacked
+        var bottomBar = new Panel { Dock = DockStyle.Bottom, Height = 80 };
+        ApplyPanelTheme(bottomBar);
 
-        var nameLabel = new Label { Text = "Name:", Location = new Point(8,  298), AutoSize = true };
-        var pathLabel = new Label { Text = "Path:", Location = new Point(8,  326), AutoSize = true };
+        var nameLabel = new Label { Text = "Name:", Location = new Point(8, 10), AutoSize = true };
+        var pathLabel = new Label { Text = "Path:",  Location = new Point(8, 44), AutoSize = true };
         ApplyControlTheme(nameLabel);
         ApplyControlTheme(pathLabel);
 
         _manualNameInput = new TextBox
         {
-            Location        = new Point(50, 295),
-            Size            = new Size(160, 23),
+            Location        = new Point(54, 7),
+            Size            = new Size(220, 26),
             PlaceholderText = "Display name…",
         };
         ApplyTextBoxTheme(_manualNameInput);
 
+        _manualAddButton = new Button
+        {
+            Text   = "+ Add",
+            Size   = new Size(92, 30),
+            Anchor = AnchorStyles.Top | AnchorStyles.Right,
+        };
+        _manualAddButton.Click += OnManualAdd;
+
         _manualPathInput = new TextBox
         {
-            Location        = new Point(50, 323),
-            Size            = new Size(320, 23),
+            Location        = new Point(54, 41),
+            Anchor          = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top,
+            Height          = 26,
             PlaceholderText = "Full path to .exe…",
         };
         ApplyTextBoxTheme(_manualPathInput);
 
         _manualBrowseButton = new Button
         {
-            Text     = "Browse…",
-            Size     = new Size(68, 26),
-            Location = new Point(376, 322),
+            Text   = "Browse…",
+            Size   = new Size(92, 30),
+            Anchor = AnchorStyles.Top | AnchorStyles.Right,
         };
         _manualBrowseButton.Click += OnManualBrowse;
 
-        _manualAddButton = new Button
-        {
-            Text     = "+ Add",
-            Size     = new Size(56, 26),
-            Location = new Point(450, 295),
-        };
-        _manualAddButton.Click += OnManualAdd;
-
         _manualRemoveButton = new Button
         {
-            Text     = "Remove",
-            Size     = new Size(66, 26),
-            Location = new Point(450, 322),
-            Enabled  = false,
+            Text    = "Remove",
+            Size    = new Size(92, 30),
+            Anchor  = AnchorStyles.Top | AnchorStyles.Right,
+            Enabled = false,
         };
         _manualRemoveButton.Click += OnManualRemove;
 
-        page.Controls.AddRange([
-            _manualListView,
+        bottomBar.SizeChanged += (_, _) =>
+        {
+            _manualRemoveButton.Location = new Point(bottomBar.Width - _manualRemoveButton.Width - 8, 7);
+            _manualAddButton.Location    = new Point(_manualRemoveButton.Left - _manualAddButton.Width - 6, 7);
+            _manualBrowseButton.Location = new Point(_manualRemoveButton.Left - _manualBrowseButton.Width - 6, 41);
+            _manualPathInput.Width       = _manualBrowseButton.Left - 54 - 8;
+        };
+
+        bottomBar.Controls.AddRange([
             nameLabel, pathLabel,
             _manualNameInput, _manualPathInput,
             _manualBrowseButton, _manualAddButton, _manualRemoveButton]);
+
+        _manualListView = new ListView
+        {
+            Dock          = DockStyle.Fill,
+            View          = View.Details,
+            FullRowSelect = true,
+            MultiSelect   = false,
+        };
+        _manualListView.Columns.Add("Name", 240);
+        _manualListView.Columns.Add("Path", 498);
+        _manualListView.SelectedIndexChanged += (_, _) =>
+            _manualRemoveButton.Enabled = _manualListView.SelectedItems.Count > 0;
+        ApplyListViewTheme(_manualListView);
+
+        page.Controls.Add(_manualListView);
+        page.Controls.Add(bottomBar);
         return page;
     }
 
@@ -354,7 +393,7 @@ public class SettingsForm : Form
             Title  = "Select game executable",
             Filter = "Executables (*.exe)|*.exe",
         };
-        if (dlg.ShowDialog() == DialogResult.OK)
+        if (dlg.ShowDialog(this) == DialogResult.OK)
             _manualPathInput.Text = dlg.FileName;
     }
 

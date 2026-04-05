@@ -65,7 +65,6 @@ public partial class GameLibraryScanner
 
                 var fullPath = Path.Combine(appsDir, "common", parsed.Value.installDir);
                 if (!Directory.Exists(fullPath)) continue;
-                if (_filter?.IsBlacklistedPath(fullPath) ?? false) continue;
 
                 yield return new GameInfo(parsed.Value.name, fullPath, "Steam");
             }
