@@ -96,6 +96,20 @@ public class HdrManager : IHdrManager
         public uint value;
     }
 
+    // Retrieves the monitor's EDID-supplied friendly name (e.g. "LG OLED C3")
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct DISPLAYCONFIG_TARGET_DEVICE_NAME
+    {
+        public DISPLAYCONFIG_DEVICE_INFO_HEADER header;
+        public uint   flags;
+        public int    outputTechnology;
+        public ushort edidManufactureId;
+        public ushort edidProductCodeId;
+        public uint   connectorInstance;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)]  public string monitorFriendlyDeviceName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string monitorDevicePath;
+    }
+
     [DllImport("user32.dll")]
     private static extern int GetDisplayConfigBufferSizes(int flags, out uint numPathArrayElements, out uint numModeInfoArrayElements);
 
@@ -108,7 +122,12 @@ public class HdrManager : IHdrManager
     private static extern int DisplayConfigGetDeviceInfo(ref DISPLAYCONFIG_ADVANCED_COLOR_INFO requestPacket);
 
     [DllImport("user32.dll")]
+    private static extern int DisplayConfigGetDeviceInfo(ref DISPLAYCONFIG_TARGET_DEVICE_NAME requestPacket);
+
+    [DllImport("user32.dll")]
     private static extern int DisplayConfigSetDeviceInfo(ref DISPLAYCONFIG_SET_ADVANCED_COLOR_STATE requestPacket);
+
+    private const int DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_FRIENDLY_NAME = 2;
 
     public IReadOnlyList<DisplayInfo> GetDisplays()
     {
@@ -128,10 +147,12 @@ public class HdrManager : IHdrManager
             if (!hdrSupported) continue;
 
             bool isPrimary = (path.sourceInfo.statusFlags & 1) != 0;
+            string name    = GetTargetFriendlyName(path.targetInfo.adapterId, path.targetInfo.id)
+                             ?? $"Display {i + 1}";
 
             result.Add(new DisplayInfo(
                 Id: path.targetInfo.id,
-                Name: $"Display {i + 1}",
+                Name: name,
                 HdrEnabled: hdrEnabled,
                 IsPrimary: isPrimary
             ));
@@ -185,6 +206,23 @@ public class HdrManager : IHdrManager
 
         if (err != ERROR_SUCCESS) throw new InvalidOperationException($"QueryDisplayConfig failed: {err}");
         return paths[..((int)numPaths)];
+    }
+
+    private string? GetTargetFriendlyName(LUID adapterId, uint targetId)
+    {
+        var request = new DISPLAYCONFIG_TARGET_DEVICE_NAME
+        {
+            header = new DISPLAYCONFIG_DEVICE_INFO_HEADER
+            {
+                type      = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_FRIENDLY_NAME,
+                size      = (uint)Marshal.SizeOf<DISPLAYCONFIG_TARGET_DEVICE_NAME>(),
+                adapterId = adapterId,
+                id        = targetId
+            }
+        };
+        if (DisplayConfigGetDeviceInfo(ref request) != ERROR_SUCCESS) return null;
+        var name = request.monitorFriendlyDeviceName;
+        return string.IsNullOrWhiteSpace(name) ? null : name;
     }
 
     private DISPLAYCONFIG_ADVANCED_COLOR_INFO GetAdvancedColorInfo(LUID adapterId, uint targetId)

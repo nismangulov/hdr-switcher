@@ -71,6 +71,29 @@ public class GameProcessMonitor : IDisposable
     // Reused across foreground-change callbacks (UI thread only) to avoid per-event allocation
     private readonly System.Text.StringBuilder _pathBuffer = new(1024);
 
+    // Executables that live inside game install directories but are not the game itself.
+    // Matching any of these prevents a launcher/anti-cheat/crash-reporter from triggering
+    // a false game-start event. Extend as new false positives are observed in the log.
+    private static readonly HashSet<string> KnownNonGameExes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        // Launchers
+        "launcher.exe", "gamelauncher.exe", "gamelauncherhelper.exe",
+        // Crash reporters / handlers
+        "crashreporter.exe", "crashpad_handler.exe", "crashhandler.exe",
+        "crashhandler64.exe", "crash_reporter.exe", "sentry.exe",
+        // Anti-cheat / overlays
+        "easyanticheat.exe", "easyanticheat_setup.exe",
+        "battleye.exe", "beclauncher.exe",
+        "gameoverlayrenderer.exe", "gameoverlayrenderer64.exe",
+        // Unreal Engine helpers
+        "unrealcefsubprocess.exe",
+        // Installers / redistributables
+        "vc_redist.x64.exe", "vc_redist.x86.exe",
+        "dxsetup.exe", "dxwebsetup.exe",
+        "ue4prereqsetup_x64.exe", "ue4prereqsetup_x86.exe",
+        "setup.exe", "install.exe", "uninstall.exe", "unins000.exe",
+    };
+
     public GameProcessMonitor(
         List<GameInfo> games,
         Action<GameInfo> onGameStart,
@@ -99,7 +122,17 @@ public class GameProcessMonitor : IDisposable
         _stopWatcher = new ManagementEventWatcher(new WqlEventQuery(
             "SELECT * FROM __InstanceDeletionEvent WITHIN 1 WHERE TargetInstance ISA 'Win32_Process'"));
         _stopWatcher.EventArrived += OnProcessDeleted;
-        _stopWatcher.Start();
+        try
+        {
+            _stopWatcher.Start();
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogScanError("WmiWatcher",
+                new InvalidOperationException(
+                    "WMI process-exit watcher failed to start — game exits will not be detected. " +
+                    "Check that the WMI service (winmgmt) is running.", ex));
+        }
     }
 
     // Called on the UI thread via the WinForms message pump
@@ -123,6 +156,10 @@ public class GameProcessMonitor : IDisposable
 
             var exePath = GetProcessPath((int)pid);
             if (exePath is null) return;
+
+            // Reject known non-game executables (launchers, anti-cheat, crash reporters)
+            // that live inside a game's install directory but are not the game itself.
+            if (KnownNonGameExes.Contains(Path.GetFileName(exePath))) return;
 
             // volatile read — no lock needed, just a reference load
             var game = Match(_games, exePath);
@@ -168,6 +205,44 @@ public class GameProcessMonitor : IDisposable
             _onGameExit(game);
         }
         catch (Exception ex) { _logger?.LogScanError("ProcessDeletion", ex); }
+    }
+
+    /// <summary>
+    /// Scans all currently running processes and registers any that match the game list
+    /// into <c>_activeGames</c> without firing <c>OnGameStart</c>. Call on the UI thread
+    /// immediately after construction so that games already running when the app starts
+    /// are tracked correctly — otherwise their exit event would fire with no saved state.
+    /// </summary>
+    public IReadOnlyList<(GameInfo Game, int Pid)> SeedRunningGames()
+    {
+        var found = new List<(GameInfo, int)>();
+        foreach (var process in System.Diagnostics.Process.GetProcesses())
+        {
+            try
+            {
+                if (KnownNonGameExes.Contains(process.ProcessName + ".exe")) continue;
+
+                var exePath = GetProcessPath(process.Id);
+                if (exePath is null) continue;
+                if (KnownNonGameExes.Contains(Path.GetFileName(exePath))) continue;
+
+                var game = Match(_games, exePath);
+                if (game is null) continue;
+
+                var procName = Path.GetFileName(exePath);
+                lock (_activeGamesLock)
+                {
+                    if (!_activeGames.ContainsKey(process.Id))
+                    {
+                        _activeGames[process.Id] = (game, procName);
+                        found.Add((game, process.Id));
+                    }
+                }
+            }
+            catch { }
+            finally { process.Dispose(); }
+        }
+        return found;
     }
 
     /// <summary>Updates the game list after a periodic library rescan.</summary>

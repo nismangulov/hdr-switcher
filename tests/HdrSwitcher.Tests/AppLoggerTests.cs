@@ -37,49 +37,62 @@ public class AppLoggerTests : IDisposable
     }
 
     [Fact]
-    public void LogGameStarted_hdr_off_logs_would_enable()
+    public void LogGameStarted_some_displays_off_logs_would_enable()
     {
         var game = new GameInfo("TestGame", @"C:\Games\Test", "Steam");
-        _logger.LogGameStarted(game, hdrWasOn: false);
+        var displays = new List<DisplayInfo>
+        {
+            new(1, "LG OLED", HdrEnabled: true,  IsPrimary: true),
+            new(2, "Dell",    HdrEnabled: false, IsPrimary: false),
+        };
+        _logger.LogGameStarted(game, displays);
         _logger.Dispose();
 
         var content = File.ReadAllText(_logPath);
         Assert.Contains("STARTED", content);
-        Assert.Contains("would enable HDR", content);
+        Assert.Contains("would enable HDR on", content);
+        Assert.Contains("Dell", content);
     }
 
     [Fact]
-    public void LogGameStarted_hdr_on_logs_do_nothing()
+    public void LogGameStarted_all_displays_on_logs_do_nothing()
     {
         var game = new GameInfo("TestGame", @"C:\Games\Test", "Steam");
-        _logger.LogGameStarted(game, hdrWasOn: true);
+        var displays = new List<DisplayInfo>
+        {
+            new(1, "LG OLED", HdrEnabled: true, IsPrimary: true),
+        };
+        _logger.LogGameStarted(game, displays);
         _logger.Dispose();
 
-        var content = File.ReadAllText(_logPath);
-        Assert.Contains("already ON", content);
+        Assert.Contains("would do nothing", File.ReadAllText(_logPath));
     }
 
     [Fact]
-    public void LogGameExited_hdr_was_off_logs_would_disable()
+    public void LogGameExited_with_pre_game_state_logs_would_restore()
     {
         var game = new GameInfo("TestGame", @"C:\Games\Test", "Steam");
-        _logger.LogGameExited(game, hdrWasOn: false);
+        var preGameDisplays = new List<DisplayInfo>
+        {
+            new(1, "LG OLED", HdrEnabled: false, IsPrimary: true),
+        };
+        _logger.LogGameExited(game, preGameDisplays);
         _logger.Dispose();
 
         var content = File.ReadAllText(_logPath);
         Assert.Contains("EXITED", content);
-        Assert.Contains("would disable HDR", content);
+        Assert.Contains("would restore", content);
+        Assert.Contains("LG OLED", content);
     }
 
     [Fact]
-    public void LogGameExited_hdr_was_on_logs_do_nothing()
+    public void LogGameExited_null_pre_game_state_logs_skip_restore()
     {
         var game = new GameInfo("TestGame", @"C:\Games\Test", "Steam");
-        _logger.LogGameExited(game, hdrWasOn: true);
+        _logger.LogGameExited(game, null);
         _logger.Dispose();
 
-        var content = File.ReadAllText(_logPath);
-        Assert.Contains("already ON before game", content);
+        Assert.Contains("would skip restore", File.ReadAllText(_logPath));
     }
 
     [Fact]
@@ -87,7 +100,7 @@ public class AppLoggerTests : IDisposable
     {
         _logger.Dispose();
         var game = new GameInfo("TestGame", @"C:\Games\Test", "Steam");
-        var ex = Record.Exception(() => _logger.LogGameStarted(game, false));
+        var ex = Record.Exception(() => _logger.LogGameStarted(game, []));
         Assert.Null(ex);
     }
 

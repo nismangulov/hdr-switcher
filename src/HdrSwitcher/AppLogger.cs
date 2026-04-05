@@ -26,23 +26,41 @@ public class AppLogger : IDisposable
         Write($"HDR     [{trigger}] {summary}");
     }
 
-    public void LogGameStarted(GameInfo game, bool hdrWasOn)
+    public void LogGameStarted(GameInfo game, IReadOnlyList<DisplayInfo> displays)
     {
         Write($"STARTED [{game.Source}] {game.Name}");
-        if (hdrWasOn)
-            Write($"  → HDR is already ON — would do nothing");
+        var summary = DisplaySummary(displays);
+        var toEnable = displays.Where(d => !d.HdrEnabled).Select(d => d.Name).ToList();
+        if (toEnable.Count == 0)
+            Write($"  → {summary} — HDR already ON on all, would do nothing");
         else
-            Write($"  → HDR is OFF — would enable HDR (saving state: OFF)");
+            Write($"  → {summary} — would enable HDR on: {string.Join(", ", toEnable)}");
     }
 
-    public void LogGameExited(GameInfo game, bool hdrWasOn)
+    public void LogGameExited(GameInfo game, IReadOnlyList<DisplayInfo>? preGameDisplays)
     {
         Write($"EXITED  [{game.Source}] {game.Name}");
-        if (hdrWasOn)
-            Write($"  → HDR was already ON before game — would do nothing");
+        if (preGameDisplays is null)
+            Write($"  → no pre-game state recorded (game was running at startup) — would skip restore");
         else
-            Write($"  → HDR was OFF before game — would disable HDR (restoring state: OFF)");
+            Write($"  → would restore: {DisplaySummary(preGameDisplays)}");
     }
+
+    public void LogSeedGames(IReadOnlyList<(GameInfo Game, int Pid)> runningGames)
+    {
+        if (runningGames.Count == 0)
+        {
+            Write("SEED    no games already running");
+            return;
+        }
+        Write($"SEED    {runningGames.Count} game(s) already running at startup:");
+        foreach (var (game, pid) in runningGames.OrderBy(x => x.Game.Source).ThenBy(x => x.Game.Name))
+            Write($"  [{game.Source}] {game.Name}  (pid {pid})");
+    }
+
+    private static string DisplaySummary(IReadOnlyList<DisplayInfo> displays) =>
+        string.Join(", ", displays.Select(
+            d => $"{d.Name}: {(d.HdrEnabled ? "ON" : "OFF")}{(d.IsPrimary ? " (primary)" : "")}"));
 
     public void LogScanError(string source, Exception ex)
         => Write($"WARN    [{source}] scan failed: {ex.GetType().Name}: {ex.Message}");

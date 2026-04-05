@@ -13,7 +13,9 @@ public class TrayApplicationContext : ApplicationContext
     private readonly AppLogger _gameLogger;
     private GameProcessMonitor? _gameMonitor;
     private volatile List<GameInfo> _currentGames = []; // written on UI + timer threads
-    private readonly Dictionary<string, bool> _preGameHdrState = new(); // install path → HDR was on
+    // install path → full display snapshot captured at game start
+    // IReadOnlyList<DisplayInfo> gives per-display state for correct multi-monitor restore
+    private readonly Dictionary<string, IReadOnlyList<DisplayInfo>> _preGameHdrState = new();
     private readonly object _gameStateLock = new();
     private System.Threading.Timer? _rescanTimer;
     private readonly CancellationTokenSource _cts = new();
@@ -91,6 +93,11 @@ public class TrayApplicationContext : ApplicationContext
                 _currentGames = games;
                 _gameMonitor  = new GameProcessMonitor(games, OnGameStart, OnGameExit, _gameLogger);
 
+                // Register games already running before the app started so their exit
+                // events are tracked correctly. Must run on the UI thread (uses _pathBuffer).
+                var alreadyRunning = _gameMonitor.SeedRunningGames();
+                _gameLogger.LogSeedGames(alreadyRunning);
+
                 // Rescan libraries every 30 minutes to pick up newly installed games
                 _rescanTimer = new System.Threading.Timer(
                     _ => RescanLibrary(), null,
@@ -101,13 +108,13 @@ public class TrayApplicationContext : ApplicationContext
 
     private void OnGameStart(GameInfo game)
     {
-        bool hdrOn = _hdr.GetDisplays().Any(d => d.HdrEnabled);
+        var displays = _hdr.GetDisplays();
         lock (_gameStateLock)
         {
             if (!_preGameHdrState.ContainsKey(game.InstallPath))
-                _preGameHdrState[game.InstallPath] = hdrOn;
+                _preGameHdrState[game.InstallPath] = displays;
         }
-        _gameLogger.LogGameStarted(game, hdrOn);
+        _gameLogger.LogGameStarted(game, displays);
         // TODO: auto-enable HDR here once logging phase is complete
     }
 
@@ -119,13 +126,13 @@ public class TrayApplicationContext : ApplicationContext
         {
             try
             {
-                bool hdrWasOn;
+                IReadOnlyList<DisplayInfo>? preGameDisplays;
                 lock (_gameStateLock)
                 {
-                    _preGameHdrState.TryGetValue(game.InstallPath, out hdrWasOn);
+                    _preGameHdrState.TryGetValue(game.InstallPath, out preGameDisplays);
                     _preGameHdrState.Remove(game.InstallPath);
                 }
-                _gameLogger.LogGameExited(game, hdrWasOn);
+                _gameLogger.LogGameExited(game, preGameDisplays);
                 // TODO: auto-restore HDR here once logging phase is complete
             }
             catch (Exception ex) { _gameLogger.LogScanError("GameExit", ex); }
