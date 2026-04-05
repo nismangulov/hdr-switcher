@@ -8,13 +8,23 @@ public record GameInfo(string Name, string InstallPath, string Source);
 
 public class GameLibraryScanner
 {
+    private readonly GameLogger? _logger;
+
+    public GameLibraryScanner(GameLogger? logger = null) => _logger = logger;
+
     public List<GameInfo> ScanAll()
     {
         var games = new List<GameInfo>();
-        try { games.AddRange(ScanSteam()); } catch { }
-        try { games.AddRange(ScanEpic()); } catch { }
-        try { games.AddRange(ScanXbox()); } catch { }
+        Scan("Steam", ScanSteam, games);
+        Scan("Epic",  ScanEpic,  games);
+        Scan("Xbox",  ScanXbox,  games);
         return games;
+    }
+
+    private void Scan(string source, Func<IEnumerable<GameInfo>> scanner, List<GameInfo> target)
+    {
+        try { target.AddRange(scanner()); }
+        catch (Exception ex) { _logger?.LogScanError(source, ex); }
     }
 
     private static IEnumerable<GameInfo> ScanSteam()
@@ -27,8 +37,9 @@ public class GameLibraryScanner
 
         var vdf = File.ReadAllText(vdfPath);
 
-        // Collect all library roots (Steam dir itself + additional library paths from vdf)
-        var libraryRoots = new List<string> { steamPath };
+        // The VDF already lists all library roots including the Steam install dir itself —
+        // no need to prepend steamPath separately (avoids duplicating the default library)
+        var libraryRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (Match m in Regex.Matches(vdf, @"""path""\s+""([^""]+)"""))
             libraryRoots.Add(m.Groups[1].Value.Replace(@"\\", @"\"));
 
@@ -39,7 +50,7 @@ public class GameLibraryScanner
 
             foreach (var acf in Directory.GetFiles(appsDir, "appmanifest_*.acf"))
             {
-                var content = File.ReadAllText(acf);
+                var content    = File.ReadAllText(acf);
                 var name       = Regex.Match(content, @"""name""\s+""([^""]+)""").Groups[1].Value;
                 var installDir = Regex.Match(content, @"""installdir""\s+""([^""]+)""").Groups[1].Value;
                 if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(installDir)) continue;
@@ -49,45 +60,6 @@ public class GameLibraryScanner
                     yield return new GameInfo(name, fullPath, "Steam");
             }
         }
-    }
-
-    private static IEnumerable<GameInfo> ScanXbox()
-    {
-        // HKLM\SOFTWARE\Microsoft\GamingServices\GameConfig has one subkey per installed
-        // Xbox / Game Pass game; the subkey name is the MSIX package full name.
-        // Install path: C:\Program Files\WindowsApps\{packageFullName}
-        // Display name: read from AppxManifest.xml inside that directory.
-        using var configKey = Registry.LocalMachine.OpenSubKey(
-            @"SOFTWARE\Microsoft\GamingServices\GameConfig");
-        if (configKey is null) yield break;
-
-        var windowsApps = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-            "WindowsApps");
-
-        foreach (var packageFullName in configKey.GetSubKeyNames())
-        {
-            var installPath = Path.Combine(windowsApps, packageFullName);
-            var manifestPath = Path.Combine(installPath, "AppxManifest.xml");
-            if (!File.Exists(manifestPath)) continue;
-
-            var name = ReadDisplayNameFromManifest(manifestPath) ?? packageFullName;
-            yield return new GameInfo(name, installPath, "Xbox");
-        }
-    }
-
-    private static string? ReadDisplayNameFromManifest(string manifestPath)
-    {
-        try
-        {
-            var doc = System.Xml.Linq.XDocument.Load(manifestPath);
-            var ns  = doc.Root?.Name.Namespace ?? System.Xml.Linq.XNamespace.None;
-            return doc.Root
-                ?.Element(ns + "Properties")
-                ?.Element(ns + "DisplayName")
-                ?.Value;
-        }
-        catch { return null; }
     }
 
     private static IEnumerable<GameInfo> ScanEpic()
@@ -112,5 +84,64 @@ public class GameLibraryScanner
             catch { }
             if (game is not null) yield return game;
         }
+    }
+
+    private static IEnumerable<GameInfo> ScanXbox()
+    {
+        // HKLM\SOFTWARE\Microsoft\GamingServices\GameConfig has one subkey per installed
+        // Xbox / Game Pass game; the subkey name is the MSIX package full name.
+        // Install path: C:\Program Files\WindowsApps\{packageFullName}
+        // Display name: read from AppxManifest.xml inside that directory.
+        using var configKey = Registry.LocalMachine.OpenSubKey(
+            @"SOFTWARE\Microsoft\GamingServices\GameConfig");
+        if (configKey is null) yield break;
+
+        var windowsApps = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            "WindowsApps");
+
+        foreach (var packageFullName in configKey.GetSubKeyNames())
+        {
+            var installPath  = Path.Combine(windowsApps, packageFullName);
+            var manifestPath = Path.Combine(installPath, "AppxManifest.xml");
+            if (!File.Exists(manifestPath)) continue;
+
+            var name = ReadDisplayNameFromManifest(manifestPath) ?? FriendlyNameFromPackage(packageFullName);
+            yield return new GameInfo(name, installPath, "Xbox");
+        }
+    }
+
+    private static string? ReadDisplayNameFromManifest(string manifestPath)
+    {
+        try
+        {
+            var doc  = System.Xml.Linq.XDocument.Load(manifestPath);
+            var ns   = doc.Root?.Name.Namespace ?? System.Xml.Linq.XNamespace.None;
+            var name = doc.Root
+                ?.Element(ns + "Properties")
+                ?.Element(ns + "DisplayName")
+                ?.Value;
+
+            // Many MSIX manifests use localized resource references (ms-resource:AppName)
+            // rather than plain text. Fall back to the package name in that case.
+            if (name is null || name.StartsWith("ms-resource:", StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            return name;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// Derives a human-readable name from an MSIX package full name
+    /// by stripping the publisher prefix and version/arch/hash suffix.
+    /// e.g. "Atari.TotalChaos_1.2.2.0_x64__xka83p2csqhz2" → "TotalChaos"
+    /// </summary>
+    private static string FriendlyNameFromPackage(string packageFullName)
+    {
+        // Format: Publisher.Name_Version_Arch_ResourceId_PublisherId
+        var withoutSuffix = packageFullName.Split('_')[0]; // "Publisher.Name"
+        var dotIdx = withoutSuffix.IndexOf('.');
+        return dotIdx >= 0 ? withoutSuffix[(dotIdx + 1)..] : withoutSuffix;
     }
 }

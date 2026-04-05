@@ -15,8 +15,8 @@ public class GameProcessMonitor : IDisposable
     private readonly ManagementEventWatcher _startWatcher;
     private readonly ManagementEventWatcher _stopWatcher;
 
-    // pid → game, so we can identify the game when the process exits
-    private readonly Dictionary<int, GameInfo> _activeGames = new();
+    // pid → (game, processName) — processName guards against PID reuse
+    private readonly Dictionary<int, (GameInfo Game, string ProcessName)> _activeGames = new();
     private readonly object _lock = new();
 
     public GameProcessMonitor(
@@ -24,7 +24,7 @@ public class GameProcessMonitor : IDisposable
         Action<GameInfo> onGameStart,
         Action<GameInfo> onGameExit)
     {
-        _games      = games;
+        _games       = games;
         _onGameStart = onGameStart;
         _onGameExit  = onGameExit;
 
@@ -51,9 +51,20 @@ public class GameProcessMonitor : IDisposable
             var game = Match(exePath);
             if (game is null) return;
 
-            var pid = Convert.ToInt32(proc["ProcessId"]);
-            lock (_lock) _activeGames[pid] = game;
-            _onGameStart(game);
+            var pid     = Convert.ToInt32(proc["ProcessId"]);
+            var procName = proc["Name"]?.ToString() ?? string.Empty;
+
+            bool firstProcess;
+            lock (_lock)
+            {
+                firstProcess = !_activeGames.ContainsKey(pid);
+                _activeGames[pid] = (game, procName);
+            }
+
+            // Only fire the event for the first process of this game
+            // (launchers and anti-cheat engines can spawn multiple tracked processes)
+            if (firstProcess)
+                _onGameStart(game);
         }
         catch { }
     }
@@ -62,24 +73,50 @@ public class GameProcessMonitor : IDisposable
     {
         try
         {
-            var proc = (ManagementBaseObject)e.NewEvent["TargetInstance"];
-            var pid  = Convert.ToInt32(proc["ProcessId"]);
+            var proc     = (ManagementBaseObject)e.NewEvent["TargetInstance"];
+            var pid      = Convert.ToInt32(proc["ProcessId"]);
+            var procName = proc["Name"]?.ToString() ?? string.Empty;
 
             GameInfo? game;
             lock (_lock)
             {
-                if (!_activeGames.TryGetValue(pid, out game)) return;
+                if (!_activeGames.TryGetValue(pid, out var entry)) return;
+
+                // Guard against PID reuse: if the process name doesn't match
+                // what we recorded at start, this is a different process
+                if (!string.Equals(entry.ProcessName, procName, StringComparison.OrdinalIgnoreCase))
+                    return;
+
                 _activeGames.Remove(pid);
+                game = entry.Game;
             }
+
             _onGameExit(game);
         }
         catch { }
     }
 
-    private GameInfo? Match(string exePath) =>
-        _games.FirstOrDefault(g =>
+    /// <summary>
+    /// Returns the first game whose install path is a directory ancestor of <paramref name="exePath"/>.
+    /// </summary>
+    public static GameInfo? Match(IReadOnlyList<GameInfo> games, string exePath) =>
+        games.FirstOrDefault(g =>
             !string.IsNullOrEmpty(g.InstallPath) &&
-            exePath.StartsWith(g.InstallPath, StringComparison.OrdinalIgnoreCase));
+            IsUnderDirectory(exePath, g.InstallPath));
+
+    private GameInfo? Match(string exePath) => Match(_games, exePath);
+
+    /// <summary>
+    /// Returns true when <paramref name="exePath"/> is inside <paramref name="dirPath"/>,
+    /// enforcing a directory-separator boundary to prevent false prefix matches
+    /// (e.g. "Elden Ring" matching "Elden Ring GOTY").
+    /// </summary>
+    public static bool IsUnderDirectory(string exePath, string dirPath)
+    {
+        if (!exePath.StartsWith(dirPath, StringComparison.OrdinalIgnoreCase)) return false;
+        if (exePath.Length == dirPath.Length) return true;
+        return exePath[dirPath.Length] is '\\' or '/';
+    }
 
     public void Dispose()
     {

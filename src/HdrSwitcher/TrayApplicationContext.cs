@@ -11,7 +11,7 @@ public class TrayApplicationContext : ApplicationContext
     private readonly NotifyIcon _tray;
     private readonly ContextMenuStrip _menu;
     private readonly GameLogger _gameLogger;
-    private readonly GameProcessMonitor _gameMonitor;
+    private GameProcessMonitor? _gameMonitor; // initialized on background thread
     private readonly Dictionary<string, bool> _preGameHdrState = new(); // game name → HDR was on
     private readonly object _gameStateLock = new();
 
@@ -65,29 +65,39 @@ public class TrayApplicationContext : ApplicationContext
         // Re-render icon when accent colour or dark/light mode changes
         SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
 
-        // Game library + process logging
+        // Game library + process logging — scan runs on a background thread to
+        // avoid blocking the UI thread with file/registry/XML I/O at startup
         _gameLogger = new GameLogger();
-        var games = new GameLibraryScanner().ScanAll();
-        _gameLogger.LogLibrary(games);
-        _gameMonitor = new GameProcessMonitor(games,
-            onGameStart: game =>
-            {
-                bool hdrOn = _hdr.GetDisplays().Any(d => d.HdrEnabled);
-                lock (_gameStateLock) _preGameHdrState[game.Name] = hdrOn;
-                _gameLogger.LogGameStarted(game, hdrOn);
-                // TODO: auto-enable HDR here once logging phase is complete
-            },
-            onGameExit: game =>
-            {
-                bool hdrWasOn;
-                lock (_gameStateLock)
+        Task.Run(() =>
+        {
+            var games = new GameLibraryScanner(_gameLogger).ScanAll();
+            _gameLogger.LogLibrary(games);
+            _gameMonitor = new GameProcessMonitor(games,
+                onGameStart: game =>
                 {
-                    _preGameHdrState.TryGetValue(game.Name, out hdrWasOn);
-                    _preGameHdrState.Remove(game.Name);
-                }
-                _gameLogger.LogGameExited(game, hdrWasOn);
-                // TODO: auto-restore HDR here once logging phase is complete
-            });
+                    bool hdrOn = _hdr.GetDisplays().Any(d => d.HdrEnabled);
+                    lock (_gameStateLock)
+                    {
+                        // Only capture state for the first process of this game;
+                        // launchers/anti-cheat can spawn multiple tracked processes
+                        if (!_preGameHdrState.ContainsKey(game.Name))
+                            _preGameHdrState[game.Name] = hdrOn;
+                    }
+                    _gameLogger.LogGameStarted(game, hdrOn);
+                    // TODO: auto-enable HDR here once logging phase is complete
+                },
+                onGameExit: game =>
+                {
+                    bool hdrWasOn;
+                    lock (_gameStateLock)
+                    {
+                        _preGameHdrState.TryGetValue(game.Name, out hdrWasOn);
+                        _preGameHdrState.Remove(game.Name);
+                    }
+                    _gameLogger.LogGameExited(game, hdrWasOn);
+                    // TODO: auto-restore HDR here once logging phase is complete
+                });
+        });
     }
 
     private void RefreshIcon()
@@ -200,7 +210,11 @@ public class TrayApplicationContext : ApplicationContext
         _menu.Items.Add(autostartItem);
 
         var logItem = new ToolStripMenuItem("Open game log");
-        logItem.Click += (_, _) => System.Diagnostics.Process.Start("notepad.exe", _gameLogger.LogPath);
+        logItem.Click += (_, _) =>
+        {
+            if (File.Exists(_gameLogger.LogPath))
+                System.Diagnostics.Process.Start("notepad.exe", _gameLogger.LogPath);
+        };
         _menu.Items.Add(logItem);
         _menu.Items.Add(new ToolStripSeparator());
 
@@ -246,7 +260,7 @@ public class TrayApplicationContext : ApplicationContext
         {
             SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
             SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
-            _gameMonitor.Dispose();
+            _gameMonitor?.Dispose();
             _gameLogger.Dispose();
             _tray.Icon?.Dispose();
             _tray.Dispose();

@@ -4,14 +4,16 @@ public class GameLogger : IDisposable
 {
     private readonly StreamWriter _writer;
     private readonly object _lock = new();
+    private bool _disposed;
 
     public string LogPath { get; }
 
-    public GameLogger()
+    public GameLogger() : this(Path.Combine(AppContext.BaseDirectory, "game-log.txt")) { }
+
+    public GameLogger(string logPath)
     {
-        var dir = AppContext.BaseDirectory;
-        LogPath = Path.Combine(dir, "game-log.txt");
-        _writer = new StreamWriter(LogPath, append: true) { AutoFlush = true };
+        LogPath = logPath;
+        _writer = new StreamWriter(logPath, append: true) { AutoFlush = true };
         Write("=== HDR Switcher started ===");
     }
 
@@ -33,6 +35,9 @@ public class GameLogger : IDisposable
             Write($"  → HDR was OFF before game — would disable HDR (restoring state: OFF)");
     }
 
+    public void LogScanError(string source, Exception ex)
+        => Write($"WARN    [{source}] scan failed: {ex.GetType().Name}: {ex.Message}");
+
     public void LogLibrary(IReadOnlyList<GameInfo> games)
     {
         var bySteam = games.Count(g => g.Source == "Steam");
@@ -46,12 +51,20 @@ public class GameLogger : IDisposable
     private void Write(string message)
     {
         lock (_lock)
+        {
+            if (_disposed) return;
             _writer.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}");
+        }
     }
 
     public void Dispose()
     {
-        Write("=== HDR Switcher stopped ===");
-        _writer.Dispose();
+        lock (_lock)
+        {
+            if (_disposed) return;
+            _disposed = true;
+            _writer.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] === HDR Switcher stopped ===");
+            _writer.Dispose();
+        }
     }
 }
