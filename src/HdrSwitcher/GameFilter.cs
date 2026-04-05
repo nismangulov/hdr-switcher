@@ -60,17 +60,17 @@ public sealed class GameFilter
                 _blacklistedPaths.Add(entry);
         }
 
-        _manualGames = manualGames
+        var validManuals = manualGames
             .Where(m => !string.IsNullOrEmpty(m.ExePath))
+            .ToList();
+        _manualGames = validManuals
             .Select(m => new GameInfo(
                 m.Name,
                 Path.GetDirectoryName(m.ExePath) ?? m.ExePath,
                 "Manual"))
             .ToList();
         _manualExePaths = new HashSet<string>(
-            manualGames
-                .Where(m => !string.IsNullOrEmpty(m.ExePath))
-                .Select(m => m.ExePath),
+            validManuals.Select(m => m.ExePath),
             StringComparer.OrdinalIgnoreCase);
     }
 
