@@ -30,6 +30,7 @@ public class HdrController : IDisposable
     {
         _hdr    = hdr;
         _logger = logger;
+        _logger.LogHdrStatus("startup", _hdr.GetDisplays());
         SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
     }
 
