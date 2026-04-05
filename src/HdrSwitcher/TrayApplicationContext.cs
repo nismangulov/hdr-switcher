@@ -10,6 +10,8 @@ public class TrayApplicationContext : ApplicationContext
     private readonly AutostartManager _autostart;
     private readonly NotifyIcon _tray;
     private readonly ContextMenuStrip _menu;
+    private readonly GameLogger _gameLogger;
+    private readonly GameProcessMonitor _gameMonitor;
 
     // NIM_SETVERSION — tells the shell to send NOTIFYICON_VERSION_4 messages,
     // which fixes tray icon behaviour on multi-monitor setups
@@ -60,6 +62,14 @@ public class TrayApplicationContext : ApplicationContext
 
         // Re-render icon when accent colour or dark/light mode changes
         SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
+
+        // Game library + process logging
+        _gameLogger = new GameLogger();
+        var games = new GameLibraryScanner().ScanAll();
+        _gameLogger.LogLibrary(games);
+        _gameMonitor = new GameProcessMonitor(games,
+            onGameStart: game => _gameLogger.Log("STARTED", game),
+            onGameExit:  game => _gameLogger.Log("EXITED", game));
     }
 
     private void RefreshIcon()
@@ -170,6 +180,10 @@ public class TrayApplicationContext : ApplicationContext
             RebuildMenu();
         };
         _menu.Items.Add(autostartItem);
+
+        var logItem = new ToolStripMenuItem("Open game log");
+        logItem.Click += (_, _) => System.Diagnostics.Process.Start("notepad.exe", _gameLogger.LogPath);
+        _menu.Items.Add(logItem);
         _menu.Items.Add(new ToolStripSeparator());
 
         var exitItem = new ToolStripMenuItem("Exit");
@@ -214,6 +228,8 @@ public class TrayApplicationContext : ApplicationContext
         {
             SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
             SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
+            _gameMonitor.Dispose();
+            _gameLogger.Dispose();
             _tray.Icon?.Dispose();
             _tray.Dispose();
             _menu.Dispose();
