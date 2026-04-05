@@ -53,30 +53,41 @@ public class GameLibraryScanner
 
     private static IEnumerable<GameInfo> ScanXbox()
     {
-        // Win32 PC games from Xbox app install to a user-configured root (default C:\XboxGames).
-        // Each game lives in {root}\{GameName}\Content\.
-        var roots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // HKLM\SOFTWARE\Microsoft\GamingServices\GameConfig has one subkey per installed
+        // Xbox / Game Pass game; the subkey name is the MSIX package full name.
+        // Install path: C:\Program Files\WindowsApps\{packageFullName}
+        // Display name: read from AppxManifest.xml inside that directory.
+        using var configKey = Registry.LocalMachine.OpenSubKey(
+            @"SOFTWARE\Microsoft\GamingServices\GameConfig");
+        if (configKey is null) yield break;
 
-        // Read user-configured install root from GamingServices registry
-        using var gsKey = Registry.LocalMachine.OpenSubKey(
-            @"SOFTWARE\Microsoft\GamingServices");
-        if (gsKey?.GetValue("PackageRoot") is string regRoot && Directory.Exists(regRoot))
-            roots.Add(regRoot);
+        var windowsApps = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            "WindowsApps");
 
-        // Always check the default location as well
-        roots.Add(@"C:\XboxGames");
-
-        foreach (var root in roots)
+        foreach (var packageFullName in configKey.GetSubKeyNames())
         {
-            if (!Directory.Exists(root)) continue;
-            foreach (var gameDir in Directory.GetDirectories(root))
-            {
-                var name        = Path.GetFileName(gameDir);
-                var contentPath = Path.Combine(gameDir, "Content");
-                var installPath = Directory.Exists(contentPath) ? contentPath : gameDir;
-                yield return new GameInfo(name, installPath, "Xbox");
-            }
+            var installPath = Path.Combine(windowsApps, packageFullName);
+            var manifestPath = Path.Combine(installPath, "AppxManifest.xml");
+            if (!File.Exists(manifestPath)) continue;
+
+            var name = ReadDisplayNameFromManifest(manifestPath) ?? packageFullName;
+            yield return new GameInfo(name, installPath, "Xbox");
         }
+    }
+
+    private static string? ReadDisplayNameFromManifest(string manifestPath)
+    {
+        try
+        {
+            var doc = System.Xml.Linq.XDocument.Load(manifestPath);
+            var ns  = doc.Root?.Name.Namespace ?? System.Xml.Linq.XNamespace.None;
+            return doc.Root
+                ?.Element(ns + "Properties")
+                ?.Element(ns + "DisplayName")
+                ?.Value;
+        }
+        catch { return null; }
     }
 
     private static IEnumerable<GameInfo> ScanEpic()
