@@ -72,6 +72,8 @@ public class TrayApplicationContext : ApplicationContext
         // GameProcessMonitor must be created on the UI thread (SetWinEventHook requirement),
         // so we post back via SynchronizationContext after the scan completes.
         _gameLogger = new GameLogger();
+        _gameLogger.LogHdrStatus("startup", _hdr.GetDisplays());
+
         var syncContext = SynchronizationContext.Current
             ?? throw new InvalidOperationException(
                 "TrayApplicationContext must be constructed on the UI thread.");
@@ -174,6 +176,7 @@ public class TrayApplicationContext : ApplicationContext
             if (primary is null) return;
             _hdr.SetHdr(primary.Id, !primary.HdrEnabled);
             RefreshIcon();
+            _gameLogger.LogHdrStatus("tray toggle", _hdr.GetDisplays());
         }
         catch (Exception ex)
         {
@@ -182,7 +185,11 @@ public class TrayApplicationContext : ApplicationContext
         }
     }
 
-    private void OnDisplaySettingsChanged(object? sender, EventArgs e) => RefreshIcon();
+    private void OnDisplaySettingsChanged(object? sender, EventArgs e)
+    {
+        RefreshIcon();
+        _gameLogger.LogHdrStatus("external change", _hdr.GetDisplays());
+    }
 
     private void OnUserPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)
     {
@@ -209,6 +216,7 @@ public class TrayApplicationContext : ApplicationContext
             {
                 _hdr.SetHdr(capturedPrimary.Id, !capturedPrimary.HdrEnabled);
                 RefreshIcon();
+                _gameLogger.LogHdrStatus("tray toggle", _hdr.GetDisplays());
             };
         }
         _menu.Items.Add(primaryItem);
@@ -228,6 +236,7 @@ public class TrayApplicationContext : ApplicationContext
                 {
                     _hdr.SetHdr(captured.Id, !captured.HdrEnabled);
                     RefreshIcon();
+                    _gameLogger.LogHdrStatus("tray toggle", _hdr.GetDisplays());
                 }
                 catch (Exception ex)
                 {

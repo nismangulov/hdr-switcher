@@ -17,6 +17,12 @@ public class GameLogger : IDisposable
         Write("=== HDR Switcher started ===");
     }
 
+    public void LogHdrStatus(string trigger, IReadOnlyList<DisplayInfo> displays)
+    {
+        Write($"HDR     [{trigger}] " + string.Join(", ", displays.Select(
+            d => $"{d.Name}: {(d.HdrEnabled ? "ON" : "OFF")}{(d.IsPrimary ? " (primary)" : "")}")));
+    }
+
     public void LogGameStarted(GameInfo game, bool hdrWasOn)
     {
         Write($"STARTED [{game.Source}] {game.Name}");
