@@ -10,12 +10,13 @@ namespace HdrSwitcher;
 /// </summary>
 public class TrayApplicationContext : ApplicationContext
 {
-    private readonly HdrController   _hdr;
-    private readonly GameCoordinator _coordinator;
-    private readonly AppLogger       _logger;
-    private readonly Action          _openSettings;
-    private readonly NotifyIcon      _tray;
+    private readonly HdrController    _hdr;
+    private readonly GameCoordinator  _coordinator;
+    private readonly string           _logPath;
+    private readonly Action           _openSettings;
+    private readonly NotifyIcon       _tray;
     private readonly ContextMenuStrip _menu;
+    private readonly SynchronizationContext _syncContext;
 
     // Icon render cache — skip GDI+ work when neither state nor theme has changed
     private HdrState _lastIconState = (HdrState)(-1);
@@ -47,13 +48,16 @@ public class TrayApplicationContext : ApplicationContext
     public TrayApplicationContext(
         HdrController   hdr,
         GameCoordinator coordinator,
-        AppLogger       logger,
+        string          logPath,
         Action          openSettings)
     {
         _hdr          = hdr;
         _coordinator  = coordinator;
-        _logger       = logger;
+        _logPath      = logPath;
         _openSettings = openSettings;
+        _syncContext  = SynchronizationContext.Current
+            ?? throw new InvalidOperationException(
+                "TrayApplicationContext must be constructed on the UI thread.");
 
         _menu = new ContextMenuStrip();
         Win11MenuRenderer.Apply(_menu);
@@ -68,9 +72,10 @@ public class TrayApplicationContext : ApplicationContext
         _tray.MouseClick += OnTrayClick;
 
         // Subscribe to state-change events
+        // GameStarted/GameExited fire off the UI thread — marshal back before touching WinForms
         _hdr.StateChanged           += OnHdrStateChanged;
-        _coordinator.GameStarted    += _ => RefreshIcon();
-        _coordinator.GameExited     += _ => RefreshIcon();
+        _coordinator.GameStarted    += _ => _syncContext.Post(_ => RefreshIcon(), null);
+        _coordinator.GameExited     += _ => _syncContext.Post(_ => RefreshIcon(), null);
         _coordinator.LibraryChanged += RebuildMenu;
 
         // Re-render on theme change (dark/light mode switch)
@@ -190,8 +195,8 @@ public class TrayApplicationContext : ApplicationContext
         var logItem = new ToolStripMenuItem("Open log");
         logItem.Click += (_, _) =>
         {
-            if (File.Exists(_logger.LogPath))
-                System.Diagnostics.Process.Start("notepad.exe", _logger.LogPath);
+            if (File.Exists(_logPath))
+                System.Diagnostics.Process.Start("notepad.exe", _logPath);
         };
         _menu.Items.Add(logItem);
         _menu.Items.Add(new ToolStripSeparator());

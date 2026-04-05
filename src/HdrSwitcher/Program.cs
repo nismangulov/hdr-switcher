@@ -8,12 +8,12 @@ Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
 Application.EnableVisualStyles();
 Application.SetCompatibleTextRenderingDefault(false);
 
-var logger      = new AppLogger();
-var autostart   = new AutostartManager();
-var settings    = new SettingsManager();
-var hdr         = new HdrController(new HdrManager(), logger);
-var coordinator = new GameCoordinator(settings, hdr, logger);
-var form        = new SettingsForm(coordinator, autostart);
-var tray        = new TrayApplicationContext(hdr, coordinator, logger, () => form.Show());
+using var logger      = new AppLogger();
+var       autostart   = new AutostartManager();
+var       settings    = new SettingsManager();
+using var hdr         = new HdrController(new HdrManager(), logger);
+using var coordinator = new GameCoordinator(settings, hdr, logger);
+var       form        = new SettingsForm(coordinator, autostart);
+var       tray        = new TrayApplicationContext(hdr, coordinator, logger.LogPath, () => form.Show());
 
 Application.Run(tray);
