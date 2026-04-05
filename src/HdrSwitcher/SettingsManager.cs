@@ -28,6 +28,9 @@ public class SettingsManager
 
     private void Load()
     {
+        // Remove any leftover .tmp from a prior crashed Save
+        try { File.Delete(ConfigPath + ".tmp"); } catch { }
+
         if (!File.Exists(ConfigPath)) return;
         try
         {
@@ -36,14 +39,12 @@ public class SettingsManager
             Blacklist   = dto.Blacklist   ?? [];
             ManualGames = dto.ManualGames ?? [];
         }
-        catch { /* corrupt config — silently use defaults */ }
+        catch (Exception ex) when (ex is System.Text.Json.JsonException or IOException)
+        { /* corrupt or unreadable config — silently use defaults */ }
     }
 
     public void Save(IReadOnlyList<string> blacklist, IReadOnlyList<ManualGame> manualGames)
     {
-        Blacklist   = [..blacklist];
-        ManualGames = [..manualGames];
-
         var dto = new SettingsDto
         {
             Blacklist   = [..blacklist],
@@ -53,6 +54,10 @@ public class SettingsManager
         var tmp  = ConfigPath + ".tmp";
         File.WriteAllText(tmp, json);
         File.Move(tmp, ConfigPath, overwrite: true);
+
+        // Update in-memory state only after successful persist
+        Blacklist   = dto.Blacklist!;
+        ManualGames = dto.ManualGames!;
     }
 
     // Internal DTO — separate from the public record so deserialization stays simple
