@@ -15,8 +15,23 @@ public class GameLogger : IDisposable
         Write("=== HDR Switcher started ===");
     }
 
-    public void Log(string eventType, GameInfo game)
-        => Write($"{eventType,-7} [{game.Source}] {game.Name}");
+    public void LogGameStarted(GameInfo game, bool hdrWasOn)
+    {
+        Write($"STARTED [{game.Source}] {game.Name}");
+        if (hdrWasOn)
+            Write($"  → HDR is already ON — would do nothing");
+        else
+            Write($"  → HDR is OFF — would enable HDR (saving state: OFF)");
+    }
+
+    public void LogGameExited(GameInfo game, bool hdrWasOn)
+    {
+        Write($"EXITED  [{game.Source}] {game.Name}");
+        if (hdrWasOn)
+            Write($"  → HDR was already ON before game — would do nothing");
+        else
+            Write($"  → HDR was OFF before game — would disable HDR (restoring state: OFF)");
+    }
 
     public void LogLibrary(IReadOnlyList<GameInfo> games)
     {

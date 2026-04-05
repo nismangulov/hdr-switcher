@@ -12,6 +12,8 @@ public class TrayApplicationContext : ApplicationContext
     private readonly ContextMenuStrip _menu;
     private readonly GameLogger _gameLogger;
     private readonly GameProcessMonitor _gameMonitor;
+    private readonly Dictionary<string, bool> _preGameHdrState = new(); // game name → HDR was on
+    private readonly object _gameStateLock = new();
 
     // NIM_SETVERSION — tells the shell to send NOTIFYICON_VERSION_4 messages,
     // which fixes tray icon behaviour on multi-monitor setups
@@ -68,8 +70,24 @@ public class TrayApplicationContext : ApplicationContext
         var games = new GameLibraryScanner().ScanAll();
         _gameLogger.LogLibrary(games);
         _gameMonitor = new GameProcessMonitor(games,
-            onGameStart: game => _gameLogger.Log("STARTED", game),
-            onGameExit:  game => _gameLogger.Log("EXITED", game));
+            onGameStart: game =>
+            {
+                bool hdrOn = _hdr.GetDisplays().Any(d => d.HdrEnabled);
+                lock (_gameStateLock) _preGameHdrState[game.Name] = hdrOn;
+                _gameLogger.LogGameStarted(game, hdrOn);
+                // TODO: auto-enable HDR here once logging phase is complete
+            },
+            onGameExit: game =>
+            {
+                bool hdrWasOn;
+                lock (_gameStateLock)
+                {
+                    _preGameHdrState.TryGetValue(game.Name, out hdrWasOn);
+                    _preGameHdrState.Remove(game.Name);
+                }
+                _gameLogger.LogGameExited(game, hdrWasOn);
+                // TODO: auto-restore HDR here once logging phase is complete
+            });
     }
 
     private void RefreshIcon()
