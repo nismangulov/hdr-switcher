@@ -23,6 +23,8 @@ public class GameLogger : IDisposable
         var bySteam = games.Count(g => g.Source == "Steam");
         var byEpic  = games.Count(g => g.Source == "Epic");
         Write($"Library loaded — {games.Count} games (Steam: {bySteam}, Epic: {byEpic})");
+        foreach (var game in games.OrderBy(g => g.Source).ThenBy(g => g.Name))
+            Write($"  [{game.Source}] {game.Name}  →  {game.InstallPath}");
     }
 
     private void Write(string message)
