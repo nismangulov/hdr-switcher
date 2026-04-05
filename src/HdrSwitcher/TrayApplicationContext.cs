@@ -182,10 +182,7 @@ public class TrayApplicationContext : ApplicationContext
 
     private void RefreshIcon(IReadOnlyList<DisplayInfo> displays)
     {
-        HdrState state = displays.Count == 0 ? HdrState.AllOff
-            : displays.All(d => d.HdrEnabled)  ? HdrState.AllOn
-            : displays.All(d => !d.HdrEnabled) ? HdrState.AllOff
-            : HdrState.Mixed;
+        HdrState state = ComputeHdrState(displays);
 
         _tray.Text = state switch
         {
@@ -245,11 +242,22 @@ public class TrayApplicationContext : ApplicationContext
         try
         {
             var displays = _hdr.GetDisplays();
+            var newState = ComputeHdrState(displays);
+            var prevState = _lastIconState;
             RefreshIcon(displays);
-            _gameLogger.LogHdrStatus("external change", displays);
+            // Skip logging if state didn't actually change (e.g. wake-from-sleep
+            // fires DisplaySettingsChanged even when HDR state was preserved).
+            if (newState != prevState)
+                _gameLogger.LogHdrStatus("external change", displays);
         }
         catch (Exception ex) { _gameLogger.LogScanError("DisplaySettingsChanged", ex); }
     }
+
+    private static HdrState ComputeHdrState(IReadOnlyList<DisplayInfo> displays) =>
+        displays.Count == 0             ? HdrState.AllOff
+        : displays.All(d => d.HdrEnabled)  ? HdrState.AllOn
+        : displays.All(d => !d.HdrEnabled) ? HdrState.AllOff
+        : HdrState.Mixed;
 
     private void OnUserPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)
     {
