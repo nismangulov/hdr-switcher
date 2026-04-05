@@ -9,10 +9,7 @@ public class GameLogger : IDisposable
 
     public GameLogger()
     {
-        var dir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "HdrSwitcher");
-        Directory.CreateDirectory(dir);
+        var dir = AppContext.BaseDirectory;
         LogPath = Path.Combine(dir, "game-log.txt");
         _writer = new StreamWriter(LogPath, append: true) { AutoFlush = true };
         Write("=== HDR Switcher started ===");
