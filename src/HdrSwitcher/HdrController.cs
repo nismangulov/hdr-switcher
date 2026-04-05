@@ -42,7 +42,16 @@ public class HdrController : IDisposable
     public void Toggle(uint displayId, bool enabled)
     {
         _ownedDisplayChange = true;
-        _hdr.SetHdr(displayId, enabled);
+        try
+        {
+            _hdr.SetHdr(displayId, enabled);
+        }
+        catch
+        {
+            // Clear the flag so the next external DisplaySettingsChanged is not silently swallowed
+            _ownedDisplayChange = false;
+            throw;
+        }
         var displays = _hdr.GetDisplays();
         _lastState = ComputeHdrState(displays);
         StateChanged?.Invoke(displays);
