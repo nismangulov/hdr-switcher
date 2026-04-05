@@ -7,15 +7,82 @@
 
 ## Overview
 
-A `SettingsForm` window (opened from the tray context menu) with three tabs — Games, Blacklist, Manually Added — backed by a persistent `hdr-switcher.json` config file. A new `GameFilter` class centralises all game-matching and exclusion logic, replacing the current hardcoded `HashSet` fields scattered across `GameLibraryScanner` and `GameProcessMonitor`.
+A `SettingsForm` window (opened from the tray context menu) with three tabs — Games, Blacklist, Manually Added — plus an Autostart toggle. Backed by a persistent `hdr-switcher.json` config file.
+
+This feature introduces two new coordinator classes (`HdrController`, `GameCoordinator`) that extract all business logic out of `TrayApplicationContext`, leaving it responsible only for the tray icon and context menu. `Program.cs` becomes the composition root that wires the object graph together.
+
+---
+
+## Revised Architecture
+
+```
+Program.cs  (composition root)
+├── AppLogger
+├── AutostartManager
+├── SettingsManager
+├── HdrController        ← IHdrManager + display events + state tracking
+├── GameCoordinator      ← scanning, monitoring, game filter, logging
+├── SettingsForm         ← GameCoordinator + AutostartManager
+└── TrayApplicationContext
+      ← HdrController    (StateChanged → RefreshIcon; Toggle on click)
+      ← GameCoordinator  (GameStarted/GameExited → RefreshIcon)
+      ← Action openSettings
+```
 
 ---
 
 ## New Files
 
+### `HdrController.cs`
+
+Wraps `IHdrManager` and owns all HDR state coordination.
+
+**Responsibilities:**
+- `Toggle(uint displayId, bool enabled)` — sets `_ownedDisplayChange`, calls `IHdrManager.SetHdr`, fires `StateChanged`
+- `GetDisplays()` — delegates to `IHdrManager`
+- Subscribes to `SystemEvents.DisplaySettingsChanged`; suppresses own-triggered events via `_ownedDisplayChange`; fires `StateChanged` only when HDR state actually changed (compared against last known state)
+- `event Action<IReadOnlyList<DisplayInfo>> StateChanged`
+- Logs HDR changes via `AppLogger` (`LogHdrStatus`)
+- Disposes display event subscription on `Dispose()`
+
+`TrayApplicationContext` and `GameCoordinator` both subscribe to `StateChanged`. Neither touches `IHdrManager` directly.
+
+### `GameCoordinator.cs`
+
+Owns all game-related logic.
+
+**Responsibilities:**
+- Creates and holds `GameFilter` (from `SettingsManager`)
+- Runs `GameLibraryScanner` at startup and on rescan
+- Creates and holds `GameProcessMonitor`
+- Handles `OnGameStart` / `OnGameExited` (snapshot, restore — currently logging phase)
+- `Rescan()` — public; recreates `GameFilter`, reruns scanner, calls `_monitor.UpdateGames(games, filter)`, logs diff
+- `GetCurrentGames()` → `IReadOnlyList<GameInfo>`
+- `GetActiveGamePids()` → `IReadOnlySet<int>`
+- `event Action GameLibraryChanged` — fires after rescan; `TrayApplicationContext` subscribes to refresh the menu
+- `event Action<GameInfo> GameStarted` / `event Action<GameInfo> GameExited` — `TrayApplicationContext` subscribes to call `RefreshIcon()` (once auto-toggle is live, HDR state will change on these events)
+- Disposes monitor and timer on `Dispose()`
+
+### `GameFilter.cs`
+
+Single source of truth for all "does this count as a game?" decisions. Immutable after construction — recreated when settings change.
+
+```csharp
+public sealed class GameFilter
+{
+    public bool IsExcludedInstallDir(string dirName) → bool
+    public bool IsBlockedExe(string exePath)         → bool
+    public bool IsManualGame(string exePath)         → bool
+    public IReadOnlyList<GameInfo> GetManualGames()  → list
+}
+```
+
+- Built-in `KnownNonGameExes` and `SteamExcludedInstallDirs` sets live here (moved from `GameProcessMonitor` and `GameLibraryScanner`)
+- User blacklist and manual games from `SettingsManager` are merged with built-in sets at construction time
+
 ### `SettingsManager.cs`
 
-Owns the JSON config file (`hdr-switcher.json`, same directory as the exe and log). Responsible for loading and saving the two user-editable lists:
+Owns `hdr-switcher.json` (same directory as exe and log).
 
 ```json
 {
@@ -29,93 +96,93 @@ Owns the JSON config file (`hdr-switcher.json`, same directory as the exe and lo
 }
 ```
 
-- **`blacklist`** — install paths or exe names/filenames the user has explicitly excluded. Populated when the user clicks "Blacklist" in the Games tab or manually types an entry in the Blacklist tab.
-- **`manualGames`** — user-defined exe paths to watch for HDR toggling. Each entry has a display `name` and an absolute `exePath`.
-- `Load()` — reads and deserialises the JSON file; returns defaults if the file does not exist.
-- `Save(IReadOnlyList<string> blacklist, IReadOnlyList<ManualGame> manualGames)` — serialises and writes atomically (write to `.tmp`, rename).
-- Exposes `IReadOnlyList<string> Blacklist` and `IReadOnlyList<ManualGame> ManualGames` properties.
-
-### `GameFilter.cs`
-
-Single source of truth for all "should this count as a game?" decisions. Constructed from a `SettingsManager` instance. Contains the built-in hardcoded sets that currently live in `GameLibraryScanner` and `GameProcessMonitor`.
-
-```csharp
-public sealed class GameFilter
-{
-    // Scanner uses this
-    public bool IsExcludedInstallDir(string dirName) → bool
-
-    // Process monitor uses these
-    public bool IsBlockedExe(string exePath)  → bool
-    public bool IsManualGame(string exePath)  → bool
-    public IReadOnlyList<GameInfo> GetManualGames() → list
-}
-```
-
-Logic:
-- `IsExcludedInstallDir` — returns true if `dirName` matches any entry in the built-in `SteamExcludedInstallDirs` set OR any blacklist entry whose value equals the dir name (case-insensitive).
-- `IsBlockedExe` — returns true if `Path.GetFileName(exePath)` matches the built-in `KnownNonGameExes` set, OR if any blacklist entry matches either the full path or the filename.
-- `IsManualGame` — returns true if `exePath` matches any `manualGame.exePath` (case-insensitive, full path).
-- `GetManualGames` — returns `manualGames` as `GameInfo` objects with `Source = "Manual"`.
+- `Load()` — reads and deserialises; returns empty defaults if file absent
+- `Save(IReadOnlyList<string> blacklist, IReadOnlyList<ManualGame> manualGames)` — writes atomically (`.tmp` then rename)
+- `IReadOnlyList<string> Blacklist` and `IReadOnlyList<ManualGame> ManualGames` properties
 
 ### `SettingsForm.cs`
 
-Non-modal `Form`. Single instance — created lazily on first open by `TrayApplicationContext`, hidden on close (not destroyed), so reopening is instant.
+Non-modal `Form`. Single instance created in `Program.cs`, hidden on close, shown via the `Action openSettings` callback.
 
-**Constructor receives:**
-- `SettingsManager` — for reading current config and saving edits
-- `Func<IReadOnlyList<GameInfo>>` — callback to get the current scanned games list
-- `Func<IReadOnlySet<int>>` — callback to get the set of active game PIDs (for Running indicator)
+**Constructor receives:** `GameCoordinator`, `AutostartManager`
 
 **Tabs:**
 
 *Games*
-- `ListView` (full-width, columns: Name · Store · Running)
-- Running column: green dot (●) when the game's process is in the active PID set; blank otherwise. Snapshot is taken when the form is shown and when Refresh is clicked — not continuously polled.
-- **Refresh** button — invokes `RescanCallback` (an `Action` injected by `TrayApplicationContext`), then re-reads the games list via the `Func<IReadOnlyList<GameInfo>>` callback and reloads the ListView
-- **Blacklist** button (enabled when a row is selected) — moves selected game's install path to the in-memory blacklist list; removes it from the Games list
+- `ListView` (columns: Name · Store · Running)
+- Running = green dot when PID is in `coordinator.GetActiveGamePids()`; snapshot taken on show and on Refresh
+- **Refresh** button — calls `coordinator.Rescan()`, reloads ListView
+- **Blacklist** button (enabled on selection) — adds selected game's install path to in-memory blacklist, removes row
 
 *Blacklist*
-- `ListBox` showing user-added entries only (built-in hardcoded entries are not shown)
+- `ListBox` — user-added entries only (built-in entries work silently, not shown)
 - `TextBox` + **Add** button — accepts exe filename or full path
-- **Remove** button (enabled when an item is selected)
+- **Remove** button (enabled on selection)
 
 *Manually Added*
 - `ListView` (columns: Name · Path)
-- Name `TextBox` + Path `TextBox` + **Browse…** button (opens `OpenFileDialog` filtered to `*.exe`) + **Add** button
-- **Remove** button (enabled when a row is selected)
+- Name `TextBox` + Path `TextBox` + **Browse…** (`OpenFileDialog`, `*.exe`) + **Add** button
+- **Remove** button (enabled on selection)
 
-**Buttons (bottom of form):**
-- **Save** — validates inputs (no empty entries, no duplicate paths), writes via `SettingsManager.Save()`, invokes `RescanCallback`, hides the form
-- **Cancel** / window **X** — discards all in-memory edits, hides the form
+*All tabs share bottom bar:*
+- **Autostart** checkbox — reads/writes `AutostartManager.IsEnabled()` / `SetEnabled()`; takes effect immediately on toggle (does not require Save)
+- **Save** — validates (no empty entries, no duplicates), calls `SettingsManager.Save()`, calls `coordinator.Rescan()`, hides form
+- **Cancel** / window **X** — discards in-memory edits, hides form
 
-Form size: 560 × 480 (fixed, non-resizable). Background and foreground colours set from `ThemeHelper.IsDarkMode` at open time to match the system dark/light theme.
+Form: 560 × 480, fixed size. Background/foreground set from `ThemeHelper.IsDarkMode` at show time.
 
 ---
 
 ## Modified Files
 
+### `Program.cs`
+
+Becomes the composition root. Constructs all objects and wires dependencies:
+
+```csharp
+var logger      = new AppLogger();
+var autostart   = new AutostartManager();
+var settings    = new SettingsManager();
+var hdr         = new HdrController(new HdrManager(), logger);
+var coordinator = new GameCoordinator(settings, hdr, logger);
+var form        = new SettingsForm(coordinator, autostart);
+var tray        = new TrayApplicationContext(hdr, coordinator, () => form.Show());
+Application.Run(tray);
+```
+
 ### `TrayApplicationContext.cs`
 
-- Creates `SettingsManager` at the top of the constructor, before `GameLibraryScanner`
-- Creates `GameFilter` from `SettingsManager` after the initial scan
-- Adds **"Settings…"** `ToolStripMenuItem` to `RebuildMenu()` (above the separator before Exit)
-- Clicking "Settings…" shows the `SettingsForm` (creates it lazily on first click)
-- `RescanLibrary()` recreates `GameFilter` from the (now-updated) `SettingsManager` before passing to `UpdateGames()`, so blacklist and manual game changes take effect immediately
+Reduced to tray icon + context menu only.
+
+**Constructor receives:** `HdrController`, `GameCoordinator`, `Action openSettings`
+
+**Keeps:**
+- `NotifyIcon`, `ContextMenuStrip`
+- `RefreshIcon()` / `ComputeHdrState()` / icon render cache
+- `ApplyNotifyIconVersion4()`
+- `SystemEvents.UserPreferenceChanged` → `RefreshIcon()` (UI theme concern, stays here)
+
+**Subscribes to:**
+- `hdrController.StateChanged` → `RefreshIcon()`
+- `coordinator.GameStarted` / `coordinator.GameExited` → `RefreshIcon()`
+- `coordinator.GameLibraryChanged` → rebuild menu (display names may change)
+
+**Menu items:** HDR Primary · separator · per-display toggles · separator · Settings… · Open log · separator · Exit
+
+**Removes:** `AutostartManager`, `SettingsManager`, `GameFilter`, `GameProcessMonitor`, `GameLibraryScanner`, `AppLogger`, all game event handlers, rescan timer, `SystemEvents.DisplaySettingsChanged`
 
 ### `GameLibraryScanner.cs`
 
-- Constructor gains an optional `GameFilter? filter` parameter
-- Replaces the inline `SteamExcludedInstallDirs` HashSet check with `filter?.IsExcludedInstallDir(installDir) ?? false`
-- `SteamExcludedInstallDirs` moves into `GameFilter` and is removed from this file
+- Constructor gains `GameFilter? filter` parameter
+- Replaces `SteamExcludedInstallDirs` check with `filter?.IsExcludedInstallDir(installDir) ?? false`
+- `SteamExcludedInstallDirs` removed (moved to `GameFilter`)
 
 ### `GameProcessMonitor.cs`
 
-- Constructor gains a `GameFilter filter` parameter (required)
-- Replaces `KnownNonGameExes.Contains(...)` check with `filter.IsBlockedExe(exePath)`
-- `UpdateGames(List<GameInfo> games, GameFilter filter)` signature updated to accept a new filter; merges `filter.GetManualGames()` into the provided games list and replaces the stored filter reference
-- Seed scan includes manual games
-- `KnownNonGameExes` moves into `GameFilter` and is removed from this file
+- Constructor gains `GameFilter filter` parameter (required)
+- `UpdateGames(List<GameInfo> games, GameFilter filter)` — updates stored filter and merges `filter.GetManualGames()` into game list
+- Replaces `KnownNonGameExes` check with `filter.IsBlockedExe(exePath)`
+- `KnownNonGameExes` removed (moved to `GameFilter`)
 
 ---
 
@@ -123,24 +190,42 @@ Form size: 560 × 480 (fixed, non-resizable). Background and foreground colours 
 
 ```
 SettingsForm.Save()
-  → SettingsManager.Save(blacklist, manualGames)         ← writes hdr-switcher.json
-  → TrayApplicationContext.RescanLibrary()
-      → new GameFilter(settingsManager)                  ← picks up updated lists
-      → new GameLibraryScanner(filter, logger).ScanAll() ← excludes newly blacklisted installs
-      → _gameMonitor.UpdateGames(games, filter)          ← adds manual games, updates block list
-      → LogRescan(...)                                   ← logs changes as usual
+  → SettingsManager.Save(blacklist, manualGames)
+  → coordinator.Rescan()
+      → new GameFilter(settingsManager)
+      → new GameLibraryScanner(filter, logger).ScanAll()
+      → _monitor.UpdateGames(games, filter)
+      → LogRescan(...)
+      → fires GameLibraryChanged
+          → TrayApplicationContext rebuilds menu
+```
+
+---
+
+## Tray Menu (revised)
+
+```
+HDR: Primary     ✓
+─────────────────
+LG OLED C3       ✓
+─────────────────
+Settings…
+Open log
+─────────────────
+Exit
 ```
 
 ---
 
 ## Files Untouched
 
-`AppLogger`, `HdrManager`, `IHdrManager`, `IconRenderer`, `Win11MenuRenderer`, `ThemeHelper`, `AutostartManager`, `Program` — no changes.
+`AppLogger`, `HdrManager`, `IHdrManager`, `IconRenderer`, `Win11MenuRenderer`, `ThemeHelper` — no changes.
 
 ---
 
 ## Testing
 
-- `GameFilterTests` — unit tests for `IsExcludedInstallDir`, `IsBlockedExe`, `IsManualGame` with built-in and user-supplied entries
-- `SettingsManagerTests` — round-trip load/save, missing file returns defaults, atomic write (`.tmp` rename)
-- `SettingsForm` — no unit tests (WinForms UI); manual verification
+- `GameFilterTests` — `IsExcludedInstallDir`, `IsBlockedExe`, `IsManualGame` with built-in and user-supplied entries
+- `SettingsManagerTests` — round-trip load/save, missing file returns defaults, atomic write
+- `HdrControllerTests` — `StateChanged` fires on external change, suppressed on own toggle, no spurious fire when state unchanged
+- `SettingsForm`, `TrayApplicationContext` — no unit tests (WinForms UI); manual verification
