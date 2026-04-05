@@ -116,6 +116,15 @@ public class GameCoordinator : IDisposable
     public IReadOnlySet<int> GetActiveGamePids() =>
         _monitor?.GetActiveGamePids() ?? EmptyPids;
 
+    /// <summary>Exposes settings for SettingsForm reads and saves.</summary>
+    public SettingsManager Settings => _settings;
+
+    /// <summary>Install paths of games currently running, for the Games tab Running column.</summary>
+    public IReadOnlySet<string> GetActiveGameInstallPaths() =>
+        (_monitor?.GetActiveGames() ?? (IReadOnlyList<GameInfo>)[])
+        .Select(g => g.InstallPath)
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
     private void OnGameStart(GameInfo game)
     {
         var displays = _hdr.GetDisplays();

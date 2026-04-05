@@ -246,6 +246,13 @@ public class GameProcessMonitor : IDisposable
             return _activeGames.Keys.ToHashSet();
     }
 
+    /// <summary>Returns a snapshot of currently tracked game entries.</summary>
+    public IReadOnlyList<GameInfo> GetActiveGames()
+    {
+        lock (_activeGamesLock)
+            return _activeGames.Values.Select(v => v.Game).ToList();
+    }
+
     // Removes _activeGames entries whose processes no longer exist.
     // Called on the rescan timer thread (every 30 min) — infrequent enough that
     // the per-entry OpenProcess overhead is negligible.
