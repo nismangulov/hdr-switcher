@@ -8,8 +8,12 @@ Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
 Application.EnableVisualStyles();
 Application.SetCompatibleTextRenderingDefault(false);
 
-var hdr = new HdrManager();
-var autostart = new AutostartManager();
-var context = new TrayApplicationContext(hdr, autostart);
+var logger      = new AppLogger();
+var autostart   = new AutostartManager();
+var settings    = new SettingsManager();
+var hdr         = new HdrController(new HdrManager(), logger);
+var coordinator = new GameCoordinator(settings, hdr, logger);
+var form        = new SettingsForm(coordinator, autostart);
+var tray        = new TrayApplicationContext(hdr, coordinator, logger, () => form.Show());
 
-Application.Run(context);
+Application.Run(tray);
