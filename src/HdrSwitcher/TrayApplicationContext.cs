@@ -254,11 +254,9 @@ public class TrayApplicationContext : ApplicationContext
         catch (Exception ex) { _gameLogger.LogScanError("DisplaySettingsChanged", ex); }
     }
 
+    // Delegates to HdrController to avoid duplication — this method will be removed in Task 7
     private static HdrState ComputeHdrState(IReadOnlyList<DisplayInfo> displays) =>
-        displays.Count == 0             ? HdrState.AllOff
-        : displays.All(d => d.HdrEnabled)  ? HdrState.AllOn
-        : displays.All(d => !d.HdrEnabled) ? HdrState.AllOff
-        : HdrState.Mixed;
+        HdrController.ComputeHdrState(displays);
 
     private void OnUserPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)
     {

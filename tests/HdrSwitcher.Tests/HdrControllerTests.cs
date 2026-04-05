@@ -68,7 +68,25 @@ public class HdrControllerTests : IDisposable
     }
 
     [Fact]
-    public void Dispose_unsubscribes_from_display_events()
+    public void Toggle_does_not_suppress_next_Toggle_when_SetHdr_throws()
+    {
+        // Arrange: fake that throws on the first SetHdr call
+        var throwingFake = new ThrowingOnFirstCallHdrManager();
+        using var logger = new AppLogger(_logPath);
+        var ctrl = new HdrController(throwingFake, logger);
+
+        // Act: first toggle throws — _ownedDisplayChange must be cleared back to false
+        Assert.Throws<InvalidOperationException>(() => ctrl.Toggle(1, true));
+
+        // Assert: subsequent Toggle works normally and fires StateChanged
+        IReadOnlyList<DisplayInfo>? received = null;
+        ctrl.StateChanged += d => received = d;
+        ctrl.Toggle(1, true); // should not throw; SetHdr succeeds on second call
+        Assert.NotNull(received);
+    }
+
+    [Fact]
+    public void Dispose_does_not_throw()
     {
         var fake = new FakeHdrManager();
         using var logger = new AppLogger(_logPath);
@@ -80,5 +98,22 @@ public class HdrControllerTests : IDisposable
     public void Dispose()
     {
         try { File.Delete(_logPath); } catch { }
+    }
+}
+
+/// <summary>Throws on the first SetHdr call, succeeds on subsequent calls.</summary>
+file sealed class ThrowingOnFirstCallHdrManager : IHdrManager
+{
+    private bool _firstCall = true;
+    public List<DisplayInfo> Displays { get; set; } =
+        [new(1, "Test", HdrEnabled: false, IsPrimary: true)];
+
+    public IReadOnlyList<DisplayInfo> GetDisplays() => Displays;
+
+    public void SetHdr(uint displayId, bool enabled)
+    {
+        if (_firstCall) { _firstCall = false; throw new InvalidOperationException("SetHdr failed"); }
+        var i = Displays.FindIndex(d => d.Id == displayId);
+        if (i >= 0) Displays[i] = Displays[i] with { HdrEnabled = enabled };
     }
 }
