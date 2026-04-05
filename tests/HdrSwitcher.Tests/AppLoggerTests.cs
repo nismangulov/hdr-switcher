@@ -91,6 +91,43 @@ public class AppLoggerTests : IDisposable
         Assert.Null(ex);
     }
 
+    [Fact]
+    public void LogHdrStatus_writes_HDR_tag_and_display_state()
+    {
+        var displays = new List<DisplayInfo>
+        {
+            new(1, "LG OLED", HdrEnabled: true,  IsPrimary: true),
+            new(2, "Dell",    HdrEnabled: false, IsPrimary: false),
+        };
+        _logger.LogHdrStatus("startup", displays);
+        _logger.Dispose();
+
+        var content = File.ReadAllText(_logPath);
+        Assert.Contains("HDR     [startup]", content);
+        Assert.Contains("LG OLED: ON (primary)", content);
+        Assert.Contains("Dell: OFF", content);
+    }
+
+    [Fact]
+    public void LogHdrStatus_handles_empty_display_list()
+    {
+        _logger.LogHdrStatus("test", []);
+        _logger.Dispose();
+
+        var content = File.ReadAllText(_logPath);
+        Assert.Contains("HDR     [test] no displays", content);
+    }
+
+    [Fact]
+    public void LogHdrStatus_marks_primary_display()
+    {
+        var displays = new List<DisplayInfo> { new(1, "Monitor", HdrEnabled: false, IsPrimary: true) };
+        _logger.LogHdrStatus("check", displays);
+        _logger.Dispose();
+
+        Assert.Contains("(primary)", File.ReadAllText(_logPath));
+    }
+
     public void Dispose()
     {
         try { _logger.Dispose(); } catch { }

@@ -109,14 +109,19 @@ public class TrayApplicationContext : ApplicationContext
 
     private void OnGameExit(GameInfo game)
     {
-        bool hdrWasOn;
-        lock (_gameStateLock)
+        // Offload to thread pool for symmetry with OnGameStart and to keep
+        // the WMI callback thread unblocked for future HDR-restore work
+        Task.Run(() =>
         {
-            _preGameHdrState.TryGetValue(game.Name, out hdrWasOn);
-            _preGameHdrState.Remove(game.Name);
-        }
-        _gameLogger.LogGameExited(game, hdrWasOn);
-        // TODO: auto-restore HDR here once logging phase is complete
+            bool hdrWasOn;
+            lock (_gameStateLock)
+            {
+                _preGameHdrState.TryGetValue(game.Name, out hdrWasOn);
+                _preGameHdrState.Remove(game.Name);
+            }
+            _gameLogger.LogGameExited(game, hdrWasOn);
+            // TODO: auto-restore HDR here once logging phase is complete
+        });
     }
 
     // Called on a thread-pool thread by System.Threading.Timer — no Task.Run needed
@@ -139,14 +144,20 @@ public class TrayApplicationContext : ApplicationContext
 
         if (newGames.Count > 0 && !_cts.IsCancellationRequested)
         {
-            _currentGames = updated; // volatile write
-            _gameMonitor?.UpdateGames(updated);
+            // Lock the paired write so two concurrent rescan callbacks (however unlikely
+            // at a 30-minute interval) cannot interleave their list and monitor updates
+            lock (_gameStateLock)
+            {
+                _currentGames = updated; // volatile write
+                _gameMonitor?.UpdateGames(updated);
+            }
         }
     }
 
-    private void RefreshIcon()
+    private void RefreshIcon() => RefreshIcon(_hdr.GetDisplays());
+
+    private void RefreshIcon(IReadOnlyList<DisplayInfo> displays)
     {
-        var displays = _hdr.GetDisplays();
         HdrState state = displays.Count == 0 ? HdrState.AllOff
             : displays.All(d => d.HdrEnabled)  ? HdrState.AllOn
             : displays.All(d => !d.HdrEnabled) ? HdrState.AllOff
@@ -171,12 +182,13 @@ public class TrayApplicationContext : ApplicationContext
 
         try
         {
-            var displays = _hdr.GetDisplays();
-            var primary = displays.FirstOrDefault(d => d.IsPrimary) ?? displays.FirstOrDefault();
+            var before  = _hdr.GetDisplays();
+            var primary = before.FirstOrDefault(d => d.IsPrimary) ?? before.FirstOrDefault();
             if (primary is null) return;
             _hdr.SetHdr(primary.Id, !primary.HdrEnabled);
-            RefreshIcon();
-            _gameLogger.LogHdrStatus("tray toggle", _hdr.GetDisplays());
+            var after = _hdr.GetDisplays();
+            RefreshIcon(after);
+            _gameLogger.LogHdrStatus("tray toggle", after);
         }
         catch (Exception ex)
         {
@@ -187,8 +199,9 @@ public class TrayApplicationContext : ApplicationContext
 
     private void OnDisplaySettingsChanged(object? sender, EventArgs e)
     {
-        RefreshIcon();
-        _gameLogger.LogHdrStatus("external change", _hdr.GetDisplays());
+        var displays = _hdr.GetDisplays();
+        RefreshIcon(displays);
+        _gameLogger.LogHdrStatus("external change", displays);
     }
 
     private void OnUserPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)
@@ -215,8 +228,9 @@ public class TrayApplicationContext : ApplicationContext
             primaryItem.Click += (_, _) =>
             {
                 _hdr.SetHdr(capturedPrimary.Id, !capturedPrimary.HdrEnabled);
-                RefreshIcon();
-                _gameLogger.LogHdrStatus("tray toggle", _hdr.GetDisplays());
+                var d = _hdr.GetDisplays();
+                RefreshIcon(d);
+                _gameLogger.LogHdrStatus("tray toggle", d);
             };
         }
         _menu.Items.Add(primaryItem);
@@ -235,8 +249,9 @@ public class TrayApplicationContext : ApplicationContext
                 try
                 {
                     _hdr.SetHdr(captured.Id, !captured.HdrEnabled);
-                    RefreshIcon();
-                    _gameLogger.LogHdrStatus("tray toggle", _hdr.GetDisplays());
+                    var d = _hdr.GetDisplays();
+                    RefreshIcon(d);
+                    _gameLogger.LogHdrStatus("tray toggle", d);
                 }
                 catch (Exception ex)
                 {

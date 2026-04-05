@@ -125,7 +125,7 @@ public class GameProcessMonitor : IDisposable
             // never block the UI message pump
             if (isNew) Task.Run(() => _onGameStart(game));
         }
-        catch { }
+        catch (Exception ex) { _logger?.LogScanError("ForegroundHook", ex); }
     }
 
     // Called on the WMI thread
@@ -148,7 +148,7 @@ public class GameProcessMonitor : IDisposable
 
             _onGameExit(game);
         }
-        catch { }
+        catch (Exception ex) { _logger?.LogScanError("ProcessDeletion", ex); }
     }
 
     /// <summary>Updates the game list after a periodic library rescan.</summary>

@@ -19,8 +19,11 @@ public class AppLogger : IDisposable
 
     public void LogHdrStatus(string trigger, IReadOnlyList<DisplayInfo> displays)
     {
-        Write($"HDR     [{trigger}] " + string.Join(", ", displays.Select(
-            d => $"{d.Name}: {(d.HdrEnabled ? "ON" : "OFF")}{(d.IsPrimary ? " (primary)" : "")}")));
+        var summary = displays.Count == 0
+            ? "no displays"
+            : string.Join(", ", displays.Select(
+                d => $"{d.Name}: {(d.HdrEnabled ? "ON" : "OFF")}{(d.IsPrimary ? " (primary)" : "")}"));
+        Write($"HDR     [{trigger}] {summary}");
     }
 
     public void LogGameStarted(GameInfo game, bool hdrWasOn)
@@ -47,10 +50,10 @@ public class AppLogger : IDisposable
     public void LogRescan(IReadOnlyList<GameInfo> newGames)
     {
         if (newGames.Count == 0)
-            Write("Rescan complete — no new games found");
+            Write("RESCAN  no new games found");
         else
         {
-            Write($"Rescan complete — {newGames.Count} new game(s) found:");
+            Write($"RESCAN  {newGames.Count} new game(s) found:");
             foreach (var game in newGames.OrderBy(g => g.Source).ThenBy(g => g.Name))
                 Write($"  [{game.Source}] {game.Name}  →  {game.InstallPath}");
         }
@@ -61,7 +64,7 @@ public class AppLogger : IDisposable
         var bySteam = games.Count(g => g.Source == "Steam");
         var byEpic  = games.Count(g => g.Source == "Epic");
         var byXbox  = games.Count(g => g.Source == "Xbox");
-        Write($"Library loaded — {games.Count} games (Steam: {bySteam}, Epic: {byEpic}, Xbox: {byXbox})");
+        Write($"LIBRARY {games.Count} games (Steam: {bySteam}, Epic: {byEpic}, Xbox: {byXbox})");
         foreach (var game in games.OrderBy(g => g.Source).ThenBy(g => g.Name))
             Write($"  [{game.Source}] {game.Name}  →  {game.InstallPath}");
     }
