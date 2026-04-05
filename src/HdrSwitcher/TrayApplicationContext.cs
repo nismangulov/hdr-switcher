@@ -96,7 +96,8 @@ public class TrayApplicationContext : ApplicationContext
             syncContext.Post(_ =>
             {
                 _currentGames = games;
-                _gameMonitor  = new GameProcessMonitor(games, OnGameStart, OnGameExit, _gameLogger);
+                var filter = new GameFilter([], []);
+                _gameMonitor  = new GameProcessMonitor(games, filter, OnGameStart, OnGameExit, _gameLogger);
 
                 // Register games already running before the app started so their exit
                 // events are tracked correctly. Must run on the UI thread (uses _pathBuffer).
@@ -173,7 +174,7 @@ public class TrayApplicationContext : ApplicationContext
             lock (_gameStateLock)
             {
                 _currentGames = updated; // volatile write
-                _gameMonitor?.UpdateGames(updated);
+                _gameMonitor?.UpdateGames(updated, new GameFilter([], []));
             }
         }
     }
