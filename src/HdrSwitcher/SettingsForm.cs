@@ -77,7 +77,7 @@ public class SettingsForm : Form
             Location = new Point(12, 14),
         };
         ApplyControlTheme(_autostartCheckbox);
-        _autostartCheckbox.CheckedChanged += (_, _) => _autostart.SetEnabled(_autostartCheckbox.Checked);
+        _autostartCheckbox.CheckedChanged += OnAutostartChanged;
 
         _saveButton = new Button
         {
@@ -181,7 +181,6 @@ public class SettingsForm : Form
             _pendingBlacklist.Add(game.InstallPath);
         _gamesListView.Items.Remove(_gamesListView.SelectedItems[0]);
         _blacklistButton.Enabled = false;
-        // Refresh blacklist tab list if it is currently shown
         LoadBlacklistTab();
     }
 
@@ -409,16 +408,26 @@ public class SettingsForm : Form
         }
     }
 
-    protected override void OnShown(EventArgs e)
+    // OnVisibleChanged fires on every Show() — OnShown only fires the first time
+    protected override void OnVisibleChanged(EventArgs e)
     {
-        base.OnShown(e);
-        DiscardEdits(); // reset to current saved state each time the form is shown
-        ApplyTheme();   // re-apply in case theme changed since last open
+        base.OnVisibleChanged(e);
+        if (!Visible) return;
+
+        DiscardEdits();
+        ApplyTheme();
         LoadGamesTab();
         LoadBlacklistTab();
         LoadManualTab();
+
+        // Suppress the handler to avoid a registry write on form open
+        _autostartCheckbox.CheckedChanged -= OnAutostartChanged;
         _autostartCheckbox.Checked = _autostart.IsEnabled();
+        _autostartCheckbox.CheckedChanged += OnAutostartChanged;
     }
+
+    private void OnAutostartChanged(object? sender, EventArgs e) =>
+        _autostart.SetEnabled(_autostartCheckbox.Checked);
 
     // ── Theme helpers ─────────────────────────────────────────────────────────
 
