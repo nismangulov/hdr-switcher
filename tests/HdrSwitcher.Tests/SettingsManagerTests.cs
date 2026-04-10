@@ -67,5 +67,57 @@ public class SettingsManagerTests : IDisposable
         Assert.Single(mgr.ManualGames);
     }
 
+    [Fact]
+    public void WindowBounds_null_on_fresh_config()
+    {
+        var mgr = new SettingsManager(Path.Combine(_dir, "fresh.json"));
+        Assert.Null(mgr.WindowBounds);
+    }
+
+    [Fact]
+    public void SaveWindowBounds_roundtrips_bounds()
+    {
+        var path = Path.Combine(_dir, "config.json");
+        var mgr  = new SettingsManager(path);
+
+        mgr.SaveWindowBounds(new System.Drawing.Rectangle(100, 200, 960, 680));
+
+        var mgr2 = new SettingsManager(path);
+        Assert.NotNull(mgr2.WindowBounds);
+        Assert.Equal(100,  mgr2.WindowBounds!.X);
+        Assert.Equal(200,  mgr2.WindowBounds.Y);
+        Assert.Equal(960,  mgr2.WindowBounds.Width);
+        Assert.Equal(680,  mgr2.WindowBounds.Height);
+    }
+
+    [Fact]
+    public void SaveWindowBounds_preserves_existing_game_settings()
+    {
+        var path = Path.Combine(_dir, "config.json");
+        var mgr  = new SettingsManager(path);
+        mgr.Save(["tool.exe"], [new ManualGame("Dolphin", @"C:\Dolphin\Dolphin.exe")]);
+
+        mgr.SaveWindowBounds(new System.Drawing.Rectangle(0, 0, 960, 680));
+
+        var mgr2 = new SettingsManager(path);
+        Assert.Single(mgr2.Blacklist);
+        Assert.Equal("tool.exe", mgr2.Blacklist[0]);
+        Assert.Single(mgr2.ManualGames);
+        Assert.NotNull(mgr2.WindowBounds);
+    }
+
+    [Fact]
+    public void SaveWindowBounds_updates_in_memory_property_immediately()
+    {
+        var path = Path.Combine(_dir, "config.json");
+        var mgr  = new SettingsManager(path);
+
+        mgr.SaveWindowBounds(new System.Drawing.Rectangle(50, 60, 800, 600));
+
+        Assert.NotNull(mgr.WindowBounds);
+        Assert.Equal(50, mgr.WindowBounds!.X);
+        Assert.Equal(60, mgr.WindowBounds.Y);
+    }
+
     public void Dispose() => Directory.Delete(_dir, recursive: true);
 }
