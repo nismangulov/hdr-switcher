@@ -53,7 +53,7 @@ public class SettingsForm : Form
         MaximizeBox     = true;
         MinimizeBox     = false;
         ShowInTaskbar   = false;
-        // StartPosition is set dynamically in OnVisibleChanged
+        StartPosition = FormStartPosition.CenterScreen; // fallback; overridden per-show in OnVisibleChanged
 
         // ── Bottom panel (Autostart + Save/Cancel) ───────────────────────────
         var bottomPanel = new Panel { Dock = DockStyle.Bottom, Height = 56 };
@@ -457,6 +457,10 @@ public class SettingsForm : Form
         {
             StartPosition = FormStartPosition.CenterScreen;
         }
+
+        ApplyListTheme(_gamesListView);
+        ApplyListTheme(_blacklistBox);
+        ApplyListTheme(_manualListView);
 
         DiscardEdits();
         LoadGamesTab();
