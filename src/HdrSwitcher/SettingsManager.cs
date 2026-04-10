@@ -54,8 +54,9 @@ public class SettingsManager
             WindowBounds = WindowBounds,   // preserve existing window state
         };
         WriteDto(dto);
-        Blacklist   = dto.Blacklist!;
-        ManualGames = dto.ManualGames!;
+        Blacklist    = dto.Blacklist!;
+        ManualGames  = dto.ManualGames!;
+        // WindowBounds unchanged — not managed by Save(); use SaveWindowBounds() for that
     }
 
     public void SaveWindowBounds(Rectangle bounds)

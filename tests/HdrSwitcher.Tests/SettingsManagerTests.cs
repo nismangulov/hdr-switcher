@@ -1,3 +1,5 @@
+using System.Drawing;
+
 namespace HdrSwitcher.Tests;
 
 public class SettingsManagerTests : IDisposable
@@ -80,7 +82,7 @@ public class SettingsManagerTests : IDisposable
         var path = Path.Combine(_dir, "config.json");
         var mgr  = new SettingsManager(path);
 
-        mgr.SaveWindowBounds(new System.Drawing.Rectangle(100, 200, 960, 680));
+        mgr.SaveWindowBounds(new Rectangle(100, 200, 960, 680));
 
         var mgr2 = new SettingsManager(path);
         Assert.NotNull(mgr2.WindowBounds);
@@ -97,7 +99,7 @@ public class SettingsManagerTests : IDisposable
         var mgr  = new SettingsManager(path);
         mgr.Save(["tool.exe"], [new ManualGame("Dolphin", @"C:\Dolphin\Dolphin.exe")]);
 
-        mgr.SaveWindowBounds(new System.Drawing.Rectangle(0, 0, 960, 680));
+        mgr.SaveWindowBounds(new Rectangle(0, 0, 960, 680));
 
         var mgr2 = new SettingsManager(path);
         Assert.Single(mgr2.Blacklist);
@@ -112,7 +114,7 @@ public class SettingsManagerTests : IDisposable
         var path = Path.Combine(_dir, "config.json");
         var mgr  = new SettingsManager(path);
 
-        mgr.SaveWindowBounds(new System.Drawing.Rectangle(50, 60, 800, 600));
+        mgr.SaveWindowBounds(new Rectangle(50, 60, 800, 600));
 
         Assert.NotNull(mgr.WindowBounds);
         Assert.Equal(50, mgr.WindowBounds!.X);
