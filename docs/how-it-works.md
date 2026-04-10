@@ -9,16 +9,22 @@ HDR Switcher is a C# .NET 10 WinForms application that runs as a system tray ico
 ## Architecture
 
 ```
-Program.cs
-└── TrayApplicationContext          ← app lifecycle, tray icon, menu, event wiring
-    ├── HdrManager                  ← Win32 Display Config API (read/write HDR)
-    ├── AutostartManager            ← HKCU Run registry key
-    ├── IconRenderer                ← GDI+ vector sun icon (multi-resolution)
-    ├── Win11MenuRenderer           ← custom ToolStrip renderer (Win11 dark/light theme)
-    ├── ThemeHelper                 ← system dark/light mode detection
-    ├── AppLogger                   ← append-only structured log (hdr-switcher.log)
-    ├── GameLibraryScanner          ← Steam / Epic / Xbox install path discovery
-    └── GameProcessMonitor          ← SetWinEventHook launch + WMI exit detection
+Program.cs                          ← composition root, single-instance mutex
+├── HdrController                   ← HDR state coordination, owns DisplaySettingsChanged
+│   └── HdrManager                  ← Win32 Display Config API (read/write HDR)
+├── GameCoordinator                 ← game library, process monitoring, HDR snapshots
+│   ├── SettingsManager             ← JSON settings (blacklist, manual games)
+│   ├── GameFilter                  ← game/exe filter rules (built-in + user)
+│   ├── GameLibraryScanner          ← Steam / Epic / Xbox install path discovery
+│   └── GameProcessMonitor          ← SetWinEventHook launch + WMI exit detection
+├── AppLogger                       ← append-only structured log (hdr-switcher.log)
+├── WinFormsDispatcher              ← UI-thread dispatch (implements IDispatcher)
+├── TrayApplicationContext          ← tray icon, context menu, event wiring
+│   ├── IconRenderer                ← GDI+ vector sun icon (multi-resolution)
+│   ├── Win11MenuRenderer           ← custom ToolStrip renderer (Win11 dark/light theme)
+│   └── ThemeHelper                 ← system dark/light mode detection
+├── SettingsForm                    ← settings window (Games, Blacklist, Manually Added tabs)
+└── AutostartManager                ← HKCU Run registry key
 ```
 
 ---
@@ -196,17 +202,103 @@ A `ManagementEventWatcher` subscribing to `__InstanceDeletionEvent WITHIN 1` del
 
 ---
 
+## Game coordinator
+
+`GameCoordinator` is the top-level orchestrator for everything game-related. It owns:
+
+- The initial library scan (runs on a background thread; posts results back to the UI thread via `IDispatcher`)
+- Construction and lifecycle of `GameProcessMonitor` (must happen on the UI thread)
+- The 30-minute rescan timer (`System.Threading.Timer`)
+- The `_preGameHdrState` snapshot dictionary
+- The `LibraryChanged`, `GameStarted`, and `GameExited` events consumed by `TrayApplicationContext` and `SettingsForm`
+
+`Rescan()` is safe to call from any thread. It constructs a fresh `GameFilter`, scans all libraries, diffs against the current game list, and posts a `LibraryChanged` notification to the UI thread.
+
+---
+
+## Settings persistence
+
+`SettingsManager` persists user preferences to `hdr-switcher.json` next to the exe. It stores two collections:
+
+- **Blacklist** — install paths (or `.exe` filenames) that should never trigger HDR
+- **ManualGames** — user-added games by display name + exe path
+
+Saves are atomic: the new JSON is written to `hdr-switcher.json.tmp`, then `File.Move(..., overwrite: true)` replaces the real file. Any leftover `.tmp` from a prior crash is deleted on startup. In-memory state is updated only after a successful persist.
+
+---
+
+## Game filter
+
+`GameFilter` is the single source of truth for all "is this a game?" decisions. It is immutable after construction — a new instance is created on every rescan so there is no concurrent mutation.
+
+It combines:
+
+- **Built-in excluded install dirs** — Steam tools/benchmarks by basename (`3DMark`, `OCCT`, `Steamworks Shared`)
+- **Built-in blocked exes** — launchers, crash reporters, anti-cheat, installers, Unreal Engine helpers
+- **User blacklist** — entries ending in `.exe` are added to the blocked-exe set; everything else is treated as an install path
+- **Manual games** — converted to `GameInfo` objects with `Source = "Manual"` and exposed to `GameLibraryScanner`
+
+---
+
+## HDR controller
+
+`HdrController` wraps `IHdrManager` and centralises all HDR state coordination:
+
+- Subscribes to `SystemEvents.DisplaySettingsChanged` and fires `StateChanged` to subscribers
+- Sets `_ownedDisplayChange = true` before each `SetHdr` call so the resulting `DisplaySettingsChanged` event is suppressed (it is already handled synchronously in `Toggle`)
+- Tracks `_lastState` to skip no-op events (e.g. wake-from-sleep fires `DisplaySettingsChanged` even when HDR state was preserved)
+- `ComputeHdrState()` is `internal static` so `TrayApplicationContext` can use it without re-reading displays
+
+---
+
+## UI dispatch
+
+Business logic is fully decoupled from WinForms via the `IDispatcher` interface:
+
+```csharp
+public interface IDispatcher
+{
+    void Post(Action action);
+}
+```
+
+`WinFormsDispatcher` implements it using the `SynchronizationContext` captured on the UI thread at startup. `GameCoordinator` uses it to marshal game events and library-changed notifications back to the UI thread before subscribers touch WinForms controls.
+
+---
+
+## Settings window
+
+`SettingsForm` is a single-instance WinForms dialog created in `Program.cs` and shown/hidden via the tray "Settings…" menu item. It never truly closes — `FormClosingEventArgs.Cancel = true` intercepts the X button and calls `Hide()` instead.
+
+It has three tabs:
+
+| Tab | Contents |
+|-----|---------|
+| Games | Read-only list of all discovered games; "Blacklist" button moves selected game to the Blacklist tab |
+| Blacklist | User-managed list of blocked install paths and exe names; supports manual text entry |
+| Manually Added | User-managed list of games by display name + exe path, with a Browse button |
+
+Edits are held in `_pendingBlacklist` and `_pendingManualGames` and only committed to `SettingsManager` when Save is clicked. Cancel and X both call `DiscardEdits()` to reset pending state from the current saved values.
+
+`OnVisibleChanged` reloads all three tabs on every `Show()`, so the form always reflects the latest library scan and saved settings.
+
+---
+
 ## HDR state saving and restore
 
-When `OnGameStart` fires:
-1. `GetDisplays()` captures the full per-display state (name, ID, HDR on/off, primary flag)
-2. The snapshot is stored in `_preGameHdrState[game.InstallPath]`
-3. *(Auto-toggle not yet enabled — currently logging phase only)*
+`GameCoordinator` coordinates HDR snapshots alongside game events:
 
-When `OnGameExit` fires:
+When `OnGameStart` fires:
+1. `HdrController.GetDisplays()` captures the full per-display state (name, ID, HDR on/off, primary flag)
+2. The snapshot is stored in `_preGameHdrState[game.InstallPath]` (guarded by `_stateLock`)
+3. The event is forwarded to subscribers via `GameStarted`
+4. *(Auto-enable HDR not yet implemented — snapshot is taken but HDR is not changed)*
+
+When `OnGameExit` fires (on a thread-pool thread via `Task.Run`):
 1. The snapshot is retrieved and removed from `_preGameHdrState`
-2. Each display is restored to its pre-game HDR state
+2. The event is forwarded to subscribers via `GameExited`
 3. If no snapshot exists (game was running at app startup), restore is skipped
+4. *(Auto-restore HDR not yet implemented — snapshot is available but not applied)*
 
 Using `InstallPath` as the dictionary key (rather than game name) ensures uniqueness across stores — two games from different platforms can share a display name but never the same install path.
 
@@ -235,13 +327,19 @@ A named global mutex (`Global\\HdrSwitcher-{guid}`) prevents more than one insta
 
 | File | Responsibility |
 |------|---------------|
-| `Program.cs` | Entry point, single-instance mutex, WinForms bootstrap |
-| `IHdrManager.cs` | `IHdrManager` interface + `DisplayInfo` record |
+| `Program.cs` | Composition root, single-instance mutex, WinForms bootstrap |
+| `IHdrManager.cs` | `IHdrManager` interface + `DisplayInfo` / `HdrState` types |
 | `HdrManager.cs` | Win32 P/Invoke, display enumeration, HDR read/write, monitor name lookup |
-| `TrayApplicationContext.cs` | App lifecycle, tray icon, menu, event wiring, game callbacks |
-| `AppLogger.cs` | Append-only structured log with fixed-width tags |
+| `HdrController.cs` | HDR state coordination, owned-change suppression, `StateChanged` event |
+| `IDispatcher.cs` | `IDispatcher` interface + `WinFormsDispatcher` implementation |
+| `SettingsManager.cs` | JSON config persistence (blacklist, manual games), atomic write-via-tmp |
+| `GameFilter.cs` | Built-in + user exe/dir exclusions, manual game list |
+| `GameCoordinator.cs` | Library scan orchestration, process monitoring, HDR snapshot, rescan timer |
 | `GameLibraryScanner.cs` | Steam VDF/ACF, Epic JSON, Xbox manifest parsing |
 | `GameProcessMonitor.cs` | `SetWinEventHook` launch detection, WMI exit detection, seed scan |
+| `TrayApplicationContext.cs` | Tray icon, context menu, event wiring |
+| `SettingsForm.cs` | WinForms settings window — Games, Blacklist, Manually Added tabs |
+| `AppLogger.cs` | Append-only structured log with fixed-width tags |
 | `IconRenderer.cs` | GDI+ sun icon rendering, multi-size ICO, app icon, render cache |
 | `Win11MenuRenderer.cs` | Custom dark/light ToolStrip renderer + DWM rounded corners |
 | `ThemeHelper.cs` | `IsDarkMode` registry read |

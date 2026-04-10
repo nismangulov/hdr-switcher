@@ -19,6 +19,7 @@ HDR Switcher puts the current state in your system tray at a glance, lets you to
 - Icon reflects current HDR state — filled sun (on) / outlined sun (off)
 - Reacts instantly when HDR is changed externally (Windows Settings, other apps)
 - **Game monitoring** — detects launched games from Steam, Epic Games, and Xbox Game Pass; automatically enables HDR on launch and restores the previous state on exit
+- **Settings window** — blacklist games that should not trigger HDR, or add any game manually by exe path
 - Optional autostart with Windows
 - Single self-contained `.exe`, no installer, no runtime required
 
@@ -40,7 +41,7 @@ To uninstall: right-click → **Exit**, then delete the `.exe`. If autostart was
 |--------|--------|
 | Left-click tray icon | Toggle HDR on primary display |
 | Right-click → display name | Toggle HDR on that specific display |
-| Right-click → Start with Windows | Enable / disable autostart |
+| Right-click → Settings… | Open the settings window |
 | Right-click → Open log | Open the activity log in Notepad |
 | Right-click → Exit | Quit |
 
