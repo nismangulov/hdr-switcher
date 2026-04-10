@@ -11,6 +11,7 @@ static class Program
 
         Application.SetHighDpiMode(HighDpiMode.SystemAware);
         Application.EnableVisualStyles();
+        Application.SetColorMode(SystemColorMode.System);
         Application.SetCompatibleTextRenderingDefault(false);
 
         using var logger      = new AppLogger();
