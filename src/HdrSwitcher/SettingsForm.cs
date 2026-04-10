@@ -40,25 +40,23 @@ public class SettingsForm : Form
     {
         _coordinator  = coordinator;
         _autostart    = autostart;
-        AutoScaleMode = AutoScaleMode.None;
+        AutoScaleMode = AutoScaleMode.Dpi;
         BuildUI();
     }
 
     private void BuildUI()
     {
         Text            = "HDR Switcher — Settings";
-        Size            = new Size(800, 640);
-        FormBorderStyle = FormBorderStyle.FixedSingle;
-        MaximizeBox     = false;
+        Size            = new Size(960, 680);
+        MinimumSize     = new Size(800, 560);
+        FormBorderStyle = FormBorderStyle.Sizable;
+        MaximizeBox     = true;
         MinimizeBox     = false;
         ShowInTaskbar   = false;
-        StartPosition   = FormStartPosition.CenterScreen;
-
-        ApplyTheme();
+        // StartPosition is set dynamically in OnVisibleChanged
 
         // ── Bottom panel (Autostart + Save/Cancel) ───────────────────────────
         var bottomPanel = new Panel { Dock = DockStyle.Bottom, Height = 56 };
-        ApplyPanelTheme(bottomPanel);
 
         _autostartCheckbox = new CheckBox
         {
@@ -67,7 +65,6 @@ public class SettingsForm : Form
             Anchor   = AnchorStyles.Left | AnchorStyles.Top,
             Location = new Point(14, 14),
         };
-        ApplyControlTheme(_autostartCheckbox);
         _autostartCheckbox.CheckedChanged += OnAutostartChanged;
 
         _cancelButton = new Button
@@ -77,7 +74,7 @@ public class SettingsForm : Form
             Anchor = AnchorStyles.Right | AnchorStyles.Top,
         };
         _cancelButton.Location = new Point(bottomPanel.Width - _cancelButton.Width - 12, 12);
-        _cancelButton.Click += (_, _) => { DiscardEdits(); Hide(); };
+        _cancelButton.Click += (_, _) => { DiscardEdits(); HideForm(); };
 
         _saveButton = new Button
         {
@@ -105,11 +102,9 @@ public class SettingsForm : Form
     private TabPage BuildGamesTab()
     {
         var page = new TabPage("Games");
-        ApplyPanelTheme(page);
 
         // Top bar: Blacklist + Refresh buttons
         var topBar = new Panel { Dock = DockStyle.Top, Height = 44 };
-        ApplyPanelTheme(topBar);
 
         _blacklistButton = new Button
         {
@@ -154,7 +149,8 @@ public class SettingsForm : Form
         _gamesListView.Columns.Add("Running",  70);
         _gamesListView.SelectedIndexChanged += (_, _) =>
             _blacklistButton.Enabled = _gamesListView.SelectedItems.Count > 0;
-        ApplyListViewTheme(_gamesListView);
+        ApplyListTheme(_gamesListView);
+        _gamesListView.Resize += (_, _) => ResizeGameColumn();
 
         // Add Fill control first, then Top — Fill gets the remaining space
         page.Controls.Add(_gamesListView);
@@ -199,11 +195,9 @@ public class SettingsForm : Form
     private TabPage BuildBlacklistTab()
     {
         var page = new TabPage("Blacklist");
-        ApplyPanelTheme(page);
 
         // Bottom bar: text input + Add/Remove buttons
         var bottomBar = new Panel { Dock = DockStyle.Bottom, Height = 44 };
-        ApplyPanelTheme(bottomBar);
 
         _blacklistInput = new TextBox
         {
@@ -212,7 +206,6 @@ public class SettingsForm : Form
             Height          = 26,
             PlaceholderText = "Executable name (launcher.exe) or full install path…",
         };
-        ApplyTextBoxTheme(_blacklistInput);
 
         _blRemoveButton = new Button
         {
@@ -247,7 +240,7 @@ public class SettingsForm : Form
         };
         _blacklistBox.SelectedIndexChanged += (_, _) =>
             _blRemoveButton.Enabled = _blacklistBox.SelectedIndex >= 0;
-        ApplyListBoxTheme(_blacklistBox);
+        ApplyListTheme(_blacklistBox);
 
         page.Controls.Add(_blacklistBox);
         page.Controls.Add(bottomBar);
@@ -287,16 +280,12 @@ public class SettingsForm : Form
     private TabPage BuildManualTab()
     {
         var page = new TabPage("Manually Added");
-        ApplyPanelTheme(page);
 
         // Bottom bar: two input rows stacked
         var bottomBar = new Panel { Dock = DockStyle.Bottom, Height = 80 };
-        ApplyPanelTheme(bottomBar);
 
         var nameLabel = new Label { Text = "Name:", Location = new Point(8, 10), AutoSize = true };
         var pathLabel = new Label { Text = "Path:",  Location = new Point(8, 44), AutoSize = true };
-        ApplyControlTheme(nameLabel);
-        ApplyControlTheme(pathLabel);
 
         _manualNameInput = new TextBox
         {
@@ -304,7 +293,6 @@ public class SettingsForm : Form
             Size            = new Size(220, 26),
             PlaceholderText = "Display name…",
         };
-        ApplyTextBoxTheme(_manualNameInput);
 
         _manualAddButton = new Button
         {
@@ -321,7 +309,6 @@ public class SettingsForm : Form
             Height          = 26,
             PlaceholderText = "Full path to .exe…",
         };
-        ApplyTextBoxTheme(_manualPathInput);
 
         _manualBrowseButton = new Button
         {
@@ -364,7 +351,7 @@ public class SettingsForm : Form
         _manualListView.Columns.Add("Path", 498);
         _manualListView.SelectedIndexChanged += (_, _) =>
             _manualRemoveButton.Enabled = _manualListView.SelectedItems.Count > 0;
-        ApplyListViewTheme(_manualListView);
+        ApplyListTheme(_manualListView);
 
         page.Controls.Add(_manualListView);
         page.Controls.Add(bottomBar);
@@ -424,7 +411,7 @@ public class SettingsForm : Form
     {
         _coordinator.Settings.Save(_pendingBlacklist, _pendingManualGames);
         _coordinator.Rescan();
-        Hide();
+        HideForm();
     }
 
     private void DiscardEdits()
@@ -433,13 +420,19 @@ public class SettingsForm : Form
         _pendingManualGames = [.._coordinator.Settings.ManualGames];
     }
 
+    private void HideForm()
+    {
+        try { _coordinator.Settings.SaveWindowBounds(Bounds); } catch { /* best-effort */ }
+        Hide();
+    }
+
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
         if (e.CloseReason == CloseReason.UserClosing)
         {
             e.Cancel = true;
             DiscardEdits();
-            Hide();
+            HideForm();
         }
         else
         {
@@ -453,8 +446,19 @@ public class SettingsForm : Form
         base.OnVisibleChanged(e);
         if (!Visible) return;
 
+        // Restore last window position/size, or center if no saved state or monitor gone
+        var saved = _coordinator.Settings.WindowBounds;
+        if (saved is not null && IsBoundsOnScreen(saved))
+        {
+            StartPosition = FormStartPosition.Manual;
+            Bounds = new Rectangle(saved.X, saved.Y, saved.Width, saved.Height);
+        }
+        else
+        {
+            StartPosition = FormStartPosition.CenterScreen;
+        }
+
         DiscardEdits();
-        ApplyTheme();
         LoadGamesTab();
         LoadBlacklistTab();
         LoadManualTab();
@@ -465,54 +469,34 @@ public class SettingsForm : Form
         _autostartCheckbox.CheckedChanged += OnAutostartChanged;
     }
 
+    private static bool IsBoundsOnScreen(WindowBoundsDto b)
+    {
+        var r = new Rectangle(b.X, b.Y, b.Width, b.Height);
+        return Screen.AllScreens.Any(s => s.WorkingArea.IntersectsWith(r));
+    }
+
     private void OnAutostartChanged(object? sender, EventArgs e) =>
         _autostart.SetEnabled(_autostartCheckbox.Checked);
 
     // ── Theme helpers ─────────────────────────────────────────────────────────
 
-    private static readonly Color DarkBg  = ColorTranslator.FromHtml("#1F1F1F");
-    private static readonly Color DarkFg  = Color.White;
-    private static readonly Color LightBg = ColorTranslator.FromHtml("#F3F3F3");
-    private static readonly Color LightFg = Color.Black;
-
-    private void ApplyTheme()
+    // SetColorMode handles most controls natively. ListView and ListBox need
+    // manual BackColor as a fallback on some Windows configurations.
+    private static void ApplyListTheme(Control c)
     {
         bool dark = ThemeHelper.IsDarkMode;
-        BackColor = dark ? DarkBg : LightBg;
-        ForeColor = dark ? DarkFg : LightFg;
+        c.BackColor = dark ? Color.FromArgb(40, 40, 40) : Color.White;
+        c.ForeColor = dark ? Color.White : Color.Black;
     }
 
-    private void ApplyPanelTheme(Control c)
+    private void ResizeGameColumn()
     {
-        bool dark   = ThemeHelper.IsDarkMode;
-        c.BackColor = dark ? DarkBg : LightBg;
-        c.ForeColor = dark ? DarkFg : LightFg;
-    }
-
-    private void ApplyControlTheme(Control c)
-    {
-        bool dark   = ThemeHelper.IsDarkMode;
-        c.ForeColor = dark ? DarkFg : LightFg;
-    }
-
-    private void ApplyListViewTheme(ListView lv)
-    {
-        bool dark    = ThemeHelper.IsDarkMode;
-        lv.BackColor = dark ? Color.FromArgb(40, 40, 40) : Color.White;
-        lv.ForeColor = dark ? DarkFg : LightFg;
-    }
-
-    private void ApplyListBoxTheme(ListBox lb)
-    {
-        bool dark    = ThemeHelper.IsDarkMode;
-        lb.BackColor = dark ? Color.FromArgb(40, 40, 40) : Color.White;
-        lb.ForeColor = dark ? DarkFg : LightFg;
-    }
-
-    private void ApplyTextBoxTheme(TextBox tb)
-    {
-        bool dark    = ThemeHelper.IsDarkMode;
-        tb.BackColor = dark ? Color.FromArgb(40, 40, 40) : Color.White;
-        tb.ForeColor = dark ? DarkFg : LightFg;
+        const int storeCol   = 90;
+        const int runningCol = 70;
+        const int scrollbar  = 20;
+        int gameCol = Math.Max(200,
+            _gamesListView.ClientSize.Width - storeCol - runningCol - scrollbar);
+        if (_gamesListView.Columns.Count > 0)
+            _gamesListView.Columns[0].Width = gameCol;
     }
 }
