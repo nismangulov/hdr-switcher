@@ -2,3 +2,5 @@
 publish/
 bin/
 obj/
+.superpowers/
+.claude/
