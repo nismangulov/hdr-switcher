@@ -464,6 +464,7 @@ public class SettingsForm : Form
 
         DiscardEdits();
         LoadGamesTab();
+        ResizeGameColumn();
         LoadBlacklistTab();
         LoadManualTab();
 
